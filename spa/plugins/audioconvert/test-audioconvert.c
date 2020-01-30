@@ -185,6 +185,38 @@ static int test_set_in_format(struct context *ctx)
 	return 0;
 }
 
+static int test_control_setup(struct context *ctx)
+{
+	struct spa_pod_builder b = { 0 };
+	uint8_t buffer[1024];
+	struct spa_pod *param;
+	int res;
+	struct spa_hook listener;
+	static const struct spa_node_events node_events = {
+		SPA_VERSION_NODE_EVENTS,
+		.port_info = port_info_check,
+	};
+
+	spa_zero(listener);
+	spa_node_add_listener(ctx->convert_node,
+			&listener, &node_events, ctx);
+
+	spa_pod_builder_init(&b, buffer, sizeof(buffer));
+
+	param = spa_pod_builder_add_object(&b,
+		SPA_TYPE_OBJECT_ParamPortConfig, SPA_PARAM_PortConfig,
+		SPA_PARAM_PORT_CONFIG_direction,	SPA_POD_Id(SPA_DIRECTION_INPUT),
+		SPA_PARAM_PORT_CONFIG_mode,		SPA_POD_Id(SPA_PARAM_PORT_CONFIG_MODE_dsp),
+		SPA_PARAM_PORT_CONFIG_control,		SPA_POD_Bool(true));
+
+	res = spa_node_set_param(ctx->convert_node, SPA_PARAM_PortConfig, 0, param);
+	spa_assert(res == 0);
+
+	spa_hook_remove(&listener);
+
+	return 0;
+}
+
 static int test_split_setup1(struct context *ctx)
 {
 	struct spa_pod_builder b = { 0 };
@@ -519,6 +551,7 @@ int main(int argc, char *argv[])
 
 	test_init_state(&ctx);
 	test_set_in_format(&ctx);
+	test_control_setup(&ctx);
 	test_split_setup1(&ctx);
 	test_split_setup2(&ctx);
 	test_convert_setup1(&ctx);
