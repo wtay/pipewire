@@ -48,7 +48,9 @@
 
 static SPA_LOG_IMPL(default_log);
 
-#define MIN_LATENCY	  1024
+#define MIN_LATENCY	    1024
+#define CONTROL_BUFFER_SIZE 32768
+
 
 struct buffer {
 	struct spa_buffer buffer;
@@ -83,7 +85,14 @@ struct data {
 	struct spa_io_buffers source_sink_io[1];
 	struct spa_buffer *source_buffers[1];
 	struct buffer source_buffer[1];
-	uint8_t ctrl[1024];
+
+	struct spa_io_buffers control_io;
+	struct spa_buffer *control_buffers[1];
+	struct buffer control_buffer[1];
+
+	int buffer_count;
+	bool start_faid_in;
+	double volume_accum;
 
 	bool running;
 	pthread_t thread;
@@ -136,6 +145,10 @@ int init_data(struct data *data)
 	const char *str;
 	struct spa_handle *handle = NULL;
 	void *iface;
+
+	/* start not doing fade-in */
+	data->start_faid_in = true;
+	data->volume_accum = 0.0;
 
 	/* init the graph */
 	spa_graph_init(&data->graph, &data->graph_state);
@@ -231,9 +244,91 @@ static int make_node(struct data *data, struct spa_node **node, const char *lib,
 	return -EBADF;
 }
 
+static int fade_in(struct data *data)
+{
+	struct spa_pod_builder b;
+	struct spa_pod_frame f[1];
+	void *buffer = data->control_buffer->datas[0].data;
+	uint32_t buffer_size = data->control_buffer->datas[0].maxsize;
+	data->control_buffer->datas[0].chunk[0].size = buffer_size;
+
+	printf ("fading in\n");
+
+	spa_pod_builder_init(&b, buffer, buffer_size);
+	spa_pod_builder_push_sequence(&b, &f[0], 0);
+	do {
+		spa_pod_builder_control(&b, 200, SPA_CONTROL_Properties);
+			spa_pod_builder_add_object(&b,
+			SPA_TYPE_OBJECT_Props, 0,
+			SPA_PROP_volume, SPA_POD_Float(data->volume_accum));
+		data->volume_accum += 0.003;
+	} while (data->volume_accum < 1.0);
+	spa_pod_builder_pop(&b, &f[0]);
+
+	return 0;
+}
+
+static int fade_out(struct data *data)
+{
+	struct spa_pod_builder b;
+	struct spa_pod_frame f[1];
+	void *buffer = data->control_buffer->datas[0].data;
+	uint32_t buffer_size = data->control_buffer->datas[0].maxsize;
+	data->control_buffer->datas[0].chunk[0].size = buffer_size;
+
+	printf ("fading out\n");
+
+	spa_pod_builder_init(&b, buffer, buffer_size);
+	spa_pod_builder_push_sequence(&b, &f[0], 0);
+	do {
+		spa_pod_builder_control(&b, 200, SPA_CONTROL_Properties);
+			spa_pod_builder_add_object(&b,
+			SPA_TYPE_OBJECT_Props, 0,
+			SPA_PROP_volume, SPA_POD_Float(data->volume_accum));
+		data->volume_accum -= 0.003;
+	} while (data->volume_accum > 0.0);
+	spa_pod_builder_pop(&b, &f[0]);
+
+	return 0;
+}
+
+static void do_fade(struct data *data)
+{
+	switch (data->control_io.status) {
+	case SPA_STATUS_OK:
+	case SPA_STATUS_NEED_DATA:
+		break;
+	case SPA_STATUS_HAVE_DATA:
+	case SPA_STATUS_STOPPED:
+	default:
+		return;
+	}
+
+	/* fade */
+	if (data->start_faid_in)
+		fade_in(data);
+	else
+		fade_out(data);
+
+	data->control_io.status = SPA_STATUS_HAVE_DATA;
+	data->control_io.buffer_id = 0;
+
+	/* alternate */
+	data->start_faid_in = !data->start_faid_in;
+}
+
 static int on_sink_node_ready(void *_data, int status)
 {
 	struct data *data = _data;
+
+	/* only do fade in/out when buffer count is 0 */
+	if (data->buffer_count == 0)
+		  do_fade(data);
+
+	/* update buffer count */
+	data->buffer_count++;
+	if (data->buffer_count > 16)
+		  data->buffer_count = 0;
 
 	spa_graph_node_process(&data->graph_source_node);
 	spa_graph_node_process(&data->graph_sink_node);
@@ -377,6 +472,7 @@ static int make_nodes(struct data *data, const char *device)
 		SPA_TYPE_OBJECT_ParamPortConfig,	SPA_PARAM_PortConfig,
 		SPA_PARAM_PORT_CONFIG_direction,	SPA_POD_Id(SPA_DIRECTION_INPUT),
 		SPA_PARAM_PORT_CONFIG_mode,		SPA_POD_Id(SPA_PARAM_PORT_CONFIG_MODE_dsp),
+		SPA_PARAM_PORT_CONFIG_control,		SPA_POD_Bool(true),
 		SPA_PARAM_PORT_CONFIG_format,		SPA_POD_Pod(param));
 	if ((res = spa_node_set_param(data->sink_node, SPA_PARAM_PortConfig, 0, param) < 0)) {
 		printf("can't setup sink node %d\n", res);
@@ -397,6 +493,15 @@ static int make_nodes(struct data *data, const char *device)
 			  SPA_IO_Buffers,
 			  &data->source_sink_io[0], sizeof(data->source_sink_io[0]))) < 0) {
 		printf("can't set io buffers on port 0 of sink node: %d\n", res);
+		return res;
+	}
+
+	/* set io buffers on control port of sink node */
+	if ((res = spa_node_port_set_io(data->sink_node,
+			SPA_DIRECTION_INPUT, 1,
+			SPA_IO_Buffers,
+			&data->control_io, sizeof(data->control_io))) < 0) {
+		printf("can't set io buffers on control port 1 of sink node\n");
 		return res;
 	}
 
@@ -495,6 +600,12 @@ static int negotiate_formats(struct data *data)
 		return res;
 	if ((res = spa_node_port_use_buffers(data->sink_node,
 		SPA_DIRECTION_INPUT, 0, 0, data->source_buffers, 1)) < 0)
+		return res;
+
+	/* Set the control buffers */
+	init_buffer(data, data->control_buffers, data->control_buffer, 1, CONTROL_BUFFER_SIZE);
+	if ((res = spa_node_port_use_buffers(data->sink_node,
+		SPA_DIRECTION_INPUT, 1, 0, data->control_buffers, 1)) < 0)
 		return res;
 
 	return 0;
