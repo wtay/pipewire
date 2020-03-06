@@ -352,49 +352,41 @@ static inline void ot_set_pod_fraction(struct ot_node *node, const char *k,
 static int ot_pod_choice_iterate(struct ot_node *node, struct ot_node *sub)
 {
 	void *current = (void*)node->extra[1].p;
-	uint32_t idx = node->extra[6].i;
+	int32_t idx = node->extra[6].i;
 	const char *label;
-	static const char *range_labels[] = { "default", "min", "max" };
-	static const char *step_labels[] = { "default", "min", "max", "step" };
+	static const char *range_labels[] = { "default", "min", "max", NULL };
+	static const char *step_labels[] = { "default", "min", "max", "step", NULL };
+	static const char *enum_labels[] = { "default", "alt%u" };
+	static const char *flags_labels[] = { "default", "flag%u" };
 
 	if (current >= node->extra[2].p)
 		return 0;
 
 	switch (node->extra[0].i) {
 	case SPA_CHOICE_Range:
-		if (idx >= SPA_N_ELEMENTS(range_labels))
-			return 0;
-		label = range_labels[idx];
+		label = range_labels[SPA_CLAMP(idx, 0, 3)];
 		break;
 	case SPA_CHOICE_Step:
-		if (idx >= SPA_N_ELEMENTS(step_labels))
-			return 0;
-		label = step_labels[idx];
+		label = step_labels[SPA_CLAMP(idx, 0, 4)];
 		break;
 	case SPA_CHOICE_Enum:
-		if (idx == 0) {
-			label = "default";
-		} else {
-			snprintf(node->buffer, sizeof(node->buffer), "alt%u", idx);
-			label = node->buffer;
-		}
+		label = enum_labels[SPA_CLAMP(idx, 0, 1)];
 		break;
 	case SPA_CHOICE_Flags:
-		if (idx == 0) {
-			label = "default";
-		} else {
-			snprintf(node->buffer, sizeof(node->buffer), "flag%u", idx);
-			label = node->buffer;
-		}
+		label = flags_labels[SPA_CLAMP(idx, 0, 1)];
 		break;
 	default:
 		return 0;
 	}
+	if (label == NULL)
+		return 0;
+
+	snprintf(node->buffer, sizeof(node->buffer), label, idx);
 
 	node->extra[6].i++;
 	node->extra[1].p = SPA_MEMBER(node->extra[1].p, node->extra[4].i, void);
 
-	return ot_pod_set_value(sub, node->extra[5].cp, label,
+	return ot_pod_set_value(sub, node->extra[5].cp, node->buffer,
 			node->extra[3].i, current, node->extra[4].i);
 }
 
