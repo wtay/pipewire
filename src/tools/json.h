@@ -31,8 +31,16 @@ extern "C" {
 
 #include "ot.h"
 
-static inline int ot_json_dump2(struct ot_node *node, int l0, int l1)
+struct ot_json_ctx {
+	int l0, l1;
+	int expensive;
+	int cutoff;
+};
+
+static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 {
+	int l0 = ctx->l0, l1 = ctx->l1;
+
 #define OUT(fmt,...)		printf(fmt, ##__VA_ARGS__)
 #define IND(fmt,level,...)	printf("%*s"fmt, (level)*2, "", ##__VA_ARGS__)
 	if (node->k) {
@@ -68,13 +76,26 @@ static inline int ot_json_dump2(struct ot_node *node, int l0, int l1)
 
 		IND("%c", l0, open_sep);
 
-		l0 = (node->flags & NODE_FLAG_FLAT) ? 0 : l1 + 1;
+		if (node->flags & NODE_FLAG_EXPENSIVE)
+			ctx->expensive++;
 
-		while (ot_node_iterate(node, &sub)) {
-			OUT("%s %s", i++ > 0 ? "," : "", l0 ? "\n" : "");
-			ot_json_dump2(&sub, l0, l1+1);
+		if (ctx->expensive <= ctx->cutoff) {
+			ctx->l1++;
+			l0 = ctx->l0;
+			ctx->l0 = (node->flags & NODE_FLAG_FLAT) ? 0 : ctx->l1;
+
+			while (ot_node_iterate(node, &sub)) {
+				OUT("%s %s", i++ > 0 ? "," : "", ctx->l0 ? "\n" : "");
+				ot_json_dump2(&sub, ctx);
+			}
+			ctx->l1--;
+			ctx->l0 = l0;
 		}
-		if (l0 && i > 0) {
+
+		if (node->flags & NODE_FLAG_EXPENSIVE)
+			ctx->expensive--;
+
+		if (!(node->flags & NODE_FLAG_FLAT) && i > 0) {
 			OUT("\n");
 			IND("%c", l1, close_sep);
 		} else {
@@ -90,9 +111,10 @@ static inline int ot_json_dump2(struct ot_node *node, int l0, int l1)
 #undef OUT
 }
 
-static inline int ot_json_dump(struct ot_node *node, int level)
+static inline int ot_json_dump(struct ot_node *node, int cutoff)
 {
-	return ot_json_dump2(node, level, level);
+	struct ot_json_ctx ctx = { 0, 0, 0, cutoff };
+	return ot_json_dump2(node, &ctx);
 }
 
 #ifdef __cplusplus

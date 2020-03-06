@@ -56,7 +56,7 @@ struct data {
 	struct spa_hook registry_listener;
 
 	int pending_seq;
-	struct spa_list proxy_list;
+	struct spa_list global_list;
 	uint32_t level;
 };
 
@@ -66,31 +66,36 @@ struct object_info {
 	const void *events;
 	void (*destroy) (void *object);
 	void (*enter) (void *object, const char *k, struct ot_node *node);
+	void (*params) (void *object, uint32_t id);
 };
 
-struct proxy_data {
+struct global {
 	struct spa_list link;
 	struct data *data;
 
-	struct pw_proxy *proxy;
-
 	uint32_t id;
 	uint32_t permissions;
-	const struct object_info *object_info;
+	const char *type;
 	uint32_t version;
+	const struct object_info *object_info;
 	struct pw_properties *props;
 
-	void *info;
-
+	struct pw_proxy *proxy;
 	struct spa_hook proxy_listener;
 	struct spa_hook object_listener;
 
+	void *info;
 	struct spa_list param_list;
 };
 
 static void core_sync(struct data *d)
 {
 	d->pending_seq = pw_core_sync(d->core, PW_ID_CORE, d->pending_seq);
+}
+static void core_roundtrip(struct data *d)
+{
+	core_sync(d);
+	pw_main_loop_run(d->loop);
 }
 
 static uint32_t clear_params(struct spa_list *param_list, uint32_t id)
@@ -129,8 +134,74 @@ static struct param *add_param(struct spa_list *param_list,
 	memcpy(p->param, param, SPA_POD_SIZE(param));
 
 	spa_list_append(param_list, &p->link);
-
 	return p;
+}
+
+
+static void
+destroy_proxy (void *data)
+{
+        struct global *gl = data;
+
+	clear_params(&gl->param_list, SPA_ID_INVALID);
+
+	if (gl->object_info && gl->object_info->destroy)
+		gl->object_info->destroy(gl->info);
+
+	spa_list_remove(&gl->link);
+}
+
+static const struct pw_proxy_events proxy_events = {
+	PW_VERSION_PROXY_EVENTS,
+	.destroy = destroy_proxy,
+};
+
+static int global_bind(struct global *gl)
+{
+	struct data *d = gl->data;
+
+	gl->proxy = pw_registry_bind(d->registry,
+			gl->id, gl->type,
+			gl->object_info->version, 0);
+	if (gl->proxy == NULL)
+		return -errno;
+
+        pw_proxy_add_object_listener(gl->proxy,
+			&gl->object_listener,
+			gl->object_info->events, gl);
+        pw_proxy_add_listener(gl->proxy,
+			&gl->proxy_listener,
+			&proxy_events, gl);
+
+	core_roundtrip(d);
+	return 0;
+}
+
+static int global_params(struct global *gl, uint32_t id)
+{
+	struct data *d = gl->data;
+
+	gl->object_info->params(gl, id);
+
+	core_roundtrip(d);
+	return 0;
+}
+
+static void ot_set_global_info(struct ot_node *node, const char *k, struct global *gl)
+{
+	if (gl->object_info == NULL ||
+	    gl->object_info->enter == NULL) {
+		ot_set_null(node, k);
+		return;
+	}
+	if (gl->info == NULL)
+		global_bind(gl);
+	if (gl->info == NULL) {
+		ot_set_null(node, k);
+		return;
+	}
+	gl->object_info->enter(gl, k, node);
+	node->flags = NODE_FLAG_EXPENSIVE;
 }
 
 /**
@@ -175,8 +246,6 @@ static int ot_props_iterate(struct ot_node *node, struct ot_node *sub)
 	const struct spa_dict *props = node->extra[1].p;
 	const char *key, *val;
         char *end;
-	long long ll;
-	double d;
 
 	if (props == NULL || current >= props->n_items)
 		return 0;
@@ -193,22 +262,20 @@ static int ot_props_iterate(struct ot_node *node, struct ot_node *sub)
 	} else if (strcmp(val, "false") == 0) {
 		ot_set_bool(sub, key, false);
 	} else {
-		ll = strtoll(val, &end, 10);
+		long long ll = strtoll(val, &end, 10);
 		if (*end == '\0') {
-	                if (ll < INT32_MIN || ll > INT32_MAX) {
+	                if (ll < INT32_MIN || ll > INT32_MAX)
 				ot_set_long(sub, key, ll);
-			} else {
+			else
 				ot_set_int(sub, key, ll);
-			}
-			return 1;
+		} else {
+			double d = strtod(val, &end);
+			if (*end == '\0')
+				ot_set_double(sub, key, d);
+			else
+				ot_set_string(sub, key, val);
 		}
 	}
-        d = strtod(val, &end);
-	if (*end == '\0') {
-		ot_set_double(sub, key, d);
-		return 1;
-	}
-	ot_set_string(sub, key, val);
 	return 1;
 }
 
@@ -452,17 +519,11 @@ static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *in
 	case SPA_TYPE_Fd:
 		ot_set_int(node, k, *(int*)body);
 		break;
-	case SPA_TYPE_Pointer:
-		ot_set_null(node, k);
-		break;
 	case SPA_TYPE_Rectangle:
 		ot_set_pod_rectangle(node, k, type, body, size);
 		break;
 	case SPA_TYPE_Fraction:
 		ot_set_pod_fraction(node, k, type, body, size);
-		break;
-	case SPA_TYPE_Bitmap:
-		ot_set_null(node, k);
 		break;
 	case SPA_TYPE_Array:
 		ot_set_pod_array(node, info, k, type, body, size);
@@ -470,18 +531,14 @@ static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *in
 	case SPA_TYPE_Choice:
 		ot_set_pod_choice(node, info, k, type, body, size);
 		break;
-	case SPA_TYPE_Struct:
-		ot_set_null(node, k);
-		break;
 	case SPA_TYPE_Object:
 		ot_set_pod_object(node, k, type, body, size);
 		break;
+	case SPA_TYPE_Pointer:
+	case SPA_TYPE_Bitmap:
+	case SPA_TYPE_Struct:
 	case SPA_TYPE_Sequence:
-		ot_set_null(node, k);
-		break;
 	case SPA_TYPE_Bytes:
-		ot_set_null(node, k);
-		break;
 	case SPA_TYPE_None:
 		ot_set_null(node, k);
 		break;
@@ -506,9 +563,18 @@ static inline void ot_set_pod(struct ot_node *node, const char *k,
  */
 static int ot_param_list_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	const struct spa_list *param_list = node->extra[1].cp;
+	struct global *gl = node->extra[1].p;
+	const struct spa_list *param_list = &gl->param_list;
 	const struct param *p;
-	uint32_t id = node->extra[2].i;
+	struct spa_param_info *params = node->extra[2].p;
+	uint32_t current = node->extra[3].i;
+	uint32_t id = params[current].id;
+
+	if (params[current].user > 0) {
+		global_params(gl, id);
+		params[current].user = 0;
+		node->extra[0].cp = spa_list_first(param_list, const struct param, link);
+	}
 
 	do {
 		p = node->extra[0].cp;
@@ -528,33 +594,36 @@ static int ot_param_list_iterate(struct ot_node *node, struct ot_node *sub)
  */
 static int ot_param_info_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	const struct spa_list *list = node->extra[3].cp;
 	uint32_t current = node->extra[0].i;
-	const struct spa_param_info *params = node->extra[1].p;
+	struct spa_param_info *params = node->extra[1].p;
 	uint32_t n_params = node->extra[2].i;
+	struct global *gl = node->extra[3].p;
 
 	if (current >= n_params)
 		return 0;
 
 	ot_set_array(sub, spa_debug_type_find_short_name(spa_type_param, params[current].id),
 			ot_param_list_iterate);
-	sub->extra[0].p = spa_list_first(list, struct param, link);
-	sub->extra[1].cp = list;
-	sub->extra[2].i = params[current].id;
-	sub->extra[3].p = node->extra[3].p;
+
+	sub->extra[0].cp = spa_list_first(&gl->param_list, const struct param, link);
+	sub->extra[1].p = gl;
+	sub->extra[2].p = params;
+	sub->extra[3].i = current;
+	sub->flags = NODE_FLAG_EXPENSIVE;
 
 	node->extra[0].i++;
 	return 1;
 }
 
 static inline void ot_set_param_info(struct ot_node *node, const char *k,
-		struct spa_param_info *params, uint32_t n_params, const struct spa_list *list)
+		struct spa_param_info *params, uint32_t n_params,
+		struct global *gl)
 {
-	ot_set_object(node, k, &ot_param_info_iterate);
+	ot_set_object(node, k, ot_param_info_iterate);
 	node->extra[0].i = 0;
 	node->extra[1].p = params;
 	node->extra[2].i = n_params;
-	node->extra[3].cp = list;
+	node->extra[3].p = gl;
 }
 
 /**
@@ -562,10 +631,10 @@ static inline void ot_set_param_info(struct ot_node *node, const char *k,
  */
 static void core_event_info(void *object, const struct pw_core_info *info)
 {
-	struct proxy_data *data = object;
-	pw_log_debug(NAME" %p: core %d info", data, data->id);
-	data->info = pw_core_info_update(data->info, info);
-	core_sync(data->data);
+	struct global *gl = object;
+	pw_log_debug(NAME" %p: core %d info", gl, gl->id);
+	gl->info = pw_core_info_update(gl->info, info);
+	core_sync(gl->data);
 }
 
 static const struct pw_core_events proxy_core_events = {
@@ -575,9 +644,9 @@ static const struct pw_core_events proxy_core_events = {
 
 static void core_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_core_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_core_info_free(gl->info);
 }
 
 static int ot_core_iterate(struct ot_node *node, struct ot_node *sub)
@@ -621,10 +690,10 @@ static int ot_core_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_core_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_core_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_core_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
+	node->extra[1].p = gl->info;
 }
 
 static const struct object_info core_info = {
@@ -632,7 +701,7 @@ static const struct object_info core_info = {
 	.version = PW_VERSION_CORE,
 	.events = &proxy_core_events,
 	.destroy = core_destroy,
-	.enter = &ot_core_info_enter,
+	.enter = ot_core_info_enter,
 };
 
 /**
@@ -640,11 +709,11 @@ static const struct object_info core_info = {
  */
 static void module_event_info(void *object, const struct pw_module_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 
-	pw_log_debug(NAME" %p: module %d info", data, data->id);
-	data->info = pw_module_info_update(data->info, info);
-	core_sync(data->data);
+	pw_log_debug(NAME" %p: module %d info", gl, gl->id);
+	gl->info = pw_module_info_update(gl->info, info);
+	core_sync(gl->data);
 }
 
 static const struct pw_module_events module_events = {
@@ -654,9 +723,9 @@ static const struct pw_module_events module_events = {
 
 static void module_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_module_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_module_info_free(gl->info);
 }
 
 static int ot_module_iterate(struct ot_node *node, struct ot_node *sub)
@@ -694,10 +763,10 @@ static int ot_module_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_module_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
+	struct global *gl = data;
 	ot_set_object(node, k, ot_module_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
+	node->extra[1].p = gl->info;
 }
 
 static const struct object_info module_info = {
@@ -705,7 +774,7 @@ static const struct object_info module_info = {
 	.version = PW_VERSION_MODULE,
 	.events = &module_events,
 	.destroy = module_destroy,
-	.enter = &ot_module_info_enter,
+	.enter = ot_module_info_enter,
 };
 
 /**
@@ -713,11 +782,11 @@ static const struct object_info module_info = {
  */
 static void factory_event_info(void *object, const struct pw_factory_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 
-	pw_log_debug(NAME" %p: factory %d info", data, data->id);
-	data->info = pw_factory_info_update(data->info, info);
-	core_sync(data->data);
+	pw_log_debug(NAME" %p: factory %d info", gl, gl->id);
+	gl->info = pw_factory_info_update(gl->info, info);
+	core_sync(gl->data);
 }
 
 static const struct pw_factory_events factory_events = {
@@ -727,9 +796,9 @@ static const struct pw_factory_events factory_events = {
 
 static void factory_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_factory_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_factory_info_free(gl->info);
 }
 
 static int ot_factory_iterate(struct ot_node *node, struct ot_node *sub)
@@ -767,10 +836,10 @@ static int ot_factory_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_factory_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_factory_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_factory_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
+	node->extra[1].p = gl->info;
 }
 
 static const struct object_info factory_info = {
@@ -778,7 +847,7 @@ static const struct object_info factory_info = {
 	.version = PW_VERSION_FACTORY,
 	.events = &factory_events,
 	.destroy = factory_destroy,
-	.enter = &ot_factory_info_enter,
+	.enter = ot_factory_info_enter,
 };
 
 /**
@@ -786,11 +855,11 @@ static const struct object_info factory_info = {
  */
 static void client_event_info(void *object, const struct pw_client_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 
-	pw_log_debug(NAME" %p: client %d info", data, data->id);
-	data->info = pw_client_info_update(data->info, info);
-	core_sync(data->data);
+	pw_log_debug(NAME" %p: client %d info", gl, gl->id);
+	gl->info = pw_client_info_update(gl->info, info);
+	core_sync(gl->data);
 }
 
 static const struct pw_client_events client_events = {
@@ -800,9 +869,9 @@ static const struct pw_client_events client_events = {
 
 static void client_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_client_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_client_info_free(gl->info);
 }
 
 static int ot_client_iterate(struct ot_node *node, struct ot_node *sub)
@@ -831,10 +900,10 @@ static int ot_client_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_client_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_client_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_client_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
+	node->extra[1].p = gl->info;
 }
 
 static const struct object_info client_info = {
@@ -842,7 +911,7 @@ static const struct object_info client_info = {
 	.version = PW_VERSION_CLIENT,
 	.events = &client_events,
 	.destroy = client_destroy,
-	.enter = &ot_client_info_enter,
+	.enter = ot_client_info_enter,
 };
 
 /**
@@ -850,31 +919,30 @@ static const struct object_info client_info = {
  */
 static void device_event_info(void *object, const struct pw_device_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 	uint32_t i;
 
-	pw_log_debug(NAME" %p: device %d info", data, data->id);
-	data->info = pw_device_info_update(data->info, info);
+	pw_log_debug(NAME" %p: device %d info", gl, gl->id);
+	info = gl->info = pw_device_info_update(gl->info, info);
 
 	if (info->change_mask & PW_DEVICE_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
+			if (info->params[i].user > 0)
+				clear_params(&gl->param_list, info->params[i].id);
 			if (!(info->params[i].flags & SPA_PARAM_INFO_READ))
-				continue;
-			clear_params(&data->param_list, info->params[i].id);
-			pw_device_enum_params((struct pw_device*)data->proxy,
-					1, info->params[i].id, 0, UINT32_MAX, NULL);
+				info->params[i].user = 0;
 		}
 	}
-	core_sync(data->data);
+	core_sync(gl->data);
 }
 
 static void device_event_param(void *object, int seq,
 		uint32_t id, uint32_t index, uint32_t next,
 		const struct spa_pod *param)
 {
-	struct proxy_data *data = object;
-	pw_log_debug(NAME" %p: device %u param %d index:%d", data, data->id, id, index);
-	add_param(&data->param_list, id, param);
+	struct global *gl = object;
+	pw_log_debug(NAME" %p: device %u param %d index:%d", gl, gl->id, id, index);
+	add_param(&gl->param_list, id, param);
 }
 
 static const struct pw_device_events device_events = {
@@ -883,17 +951,24 @@ static const struct pw_device_events device_events = {
 	.param = device_event_param,
 };
 
+static void device_params(void *object, uint32_t id)
+{
+	struct global *gl = object;
+	pw_device_enum_params((struct pw_device*)gl->proxy,
+			1, id, 0, UINT32_MAX, NULL);
+}
+
 static void device_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_device_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_device_info_free(gl->info);
 }
 
 static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	struct pw_device_info *i = node->extra[1].p;
-	struct spa_list *param_list = node->extra[2].p;
+	struct global *gl = node->extra[1].p;
+	struct pw_device_info *i = gl->info;
 	static const struct mask_table change_mask[] = {
 		{ PW_DEVICE_CHANGE_MASK_PROPS, "props" },
 		{ PW_DEVICE_CHANGE_MASK_PARAMS, "params" },
@@ -911,7 +986,7 @@ static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
 		ot_set_props(sub, "props", i->props);
 		break;
 	case 3:
-		ot_set_param_info(sub, "params", i->params, i->n_params, param_list);
+		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -921,11 +996,10 @@ static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_device_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_device_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_device_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
-	node->extra[2].p = &pd->param_list;
+	node->extra[1].p = gl;
 }
 
 static const struct object_info device_info = {
@@ -933,7 +1007,8 @@ static const struct object_info device_info = {
 	.version = PW_VERSION_DEVICE,
 	.events = &device_events,
 	.destroy = device_destroy,
-	.enter = &ot_device_info_enter
+	.enter = ot_device_info_enter,
+	.params = device_params
 };
 
 /**
@@ -941,31 +1016,30 @@ static const struct object_info device_info = {
  */
 static void node_event_info(void *object, const struct pw_node_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 	uint32_t i;
 
-	pw_log_debug(NAME" %p: node %d info", data, data->id);
-	data->info = pw_node_info_update(data->info, info);
+	pw_log_debug(NAME" %p: node %d info", gl, gl->id);
+	info = gl->info = pw_node_info_update(gl->info, info);
 
 	if (info->change_mask & PW_NODE_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
+			if (info->params[i].user > 0)
+				clear_params(&gl->param_list, info->params[i].id);
 			if (!(info->params[i].flags & SPA_PARAM_INFO_READ))
-				continue;
-			clear_params(&data->param_list, info->params[i].id);
-			pw_node_enum_params((struct pw_node*)data->proxy,
-					1, info->params[i].id, 0, UINT32_MAX, NULL);
+				info->params[i].user = 0;
 		}
 	}
-	core_sync(data->data);
+	core_sync(gl->data);
 }
 
 static void node_event_param(void *object, int seq,
 		uint32_t id, uint32_t index, uint32_t next,
 		const struct spa_pod *param)
 {
-	struct proxy_data *data = object;
-	pw_log_debug(NAME" %p: node %u param %d index:%d", data, data->id, id, index);
-	add_param(&data->param_list, id, param);
+	struct global *gl = object;
+	pw_log_debug(NAME" %p: node %u param %d index:%d", gl, gl->id, id, index);
+	add_param(&gl->param_list, id, param);
 }
 
 static const struct pw_node_events node_events = {
@@ -974,17 +1048,24 @@ static const struct pw_node_events node_events = {
 	.param = node_event_param,
 };
 
+static void node_params(void *object, uint32_t id)
+{
+	struct global *gl = object;
+	pw_node_enum_params((struct pw_node*)gl->proxy,
+			1, id, 0, UINT32_MAX, NULL);
+}
+
 static void node_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_node_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_node_info_free(gl->info);
 }
 
 static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	struct pw_node_info *i = node->extra[1].p;
-	struct spa_list *param_list = node->extra[2].p;
+	struct global *gl = node->extra[1].p;
+	struct pw_node_info *i = gl->info;
 	static const struct mask_table change_mask[] = {
 		{ PW_NODE_CHANGE_MASK_INPUT_PORTS, "n-input-ports" },
 		{ PW_NODE_CHANGE_MASK_OUTPUT_PORTS, "n-output-ports" },
@@ -1023,7 +1104,7 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
 		ot_set_props(sub, "props", i->props);
 		break;
 	case 9:
-		ot_set_param_info(sub, "params", i->params, i->n_params, param_list);
+		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -1033,11 +1114,10 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_node_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_node_info_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_node_info_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
-	node->extra[2].p = &pd->param_list;
+	node->extra[1].p = gl;
 }
 
 static const struct object_info node_info = {
@@ -1045,7 +1125,8 @@ static const struct object_info node_info = {
 	.version = PW_VERSION_NODE,
 	.events = &node_events,
 	.destroy = node_destroy,
-	.enter = &ot_node_info_enter
+	.enter = ot_node_info_enter,
+	.params = node_params
 };
 
 /**
@@ -1053,31 +1134,30 @@ static const struct object_info node_info = {
  */
 static void port_event_info(void *object, const struct pw_port_info *info)
 {
-	struct proxy_data *data = object;
+	struct global *gl = object;
 	uint32_t i;
 
-	pw_log_debug(NAME" %p: port %u info", data, data->id);
-	data->info = pw_port_info_update(data->info, info);
+	pw_log_debug(NAME" %p: port %u info", gl, gl->id);
+	info = gl->info = pw_port_info_update(gl->info, info);
 
 	if (info->change_mask & PW_PORT_CHANGE_MASK_PARAMS) {
 		for (i = 0; i < info->n_params; i++) {
+			if (info->params[i].user > 0)
+				clear_params(&gl->param_list, info->params[i].id);
 			if (!(info->params[i].flags & SPA_PARAM_INFO_READ))
-				continue;
-			clear_params(&data->param_list, info->params[i].id);
-			pw_port_enum_params((struct pw_port*)data->proxy,
-					1, info->params[i].id, 0, UINT32_MAX, NULL);
+				info->params[i].user = 0;
 		}
 	}
-	core_sync(data->data);
+	core_sync(gl->data);
 }
 
 static void port_event_param(void *object, int seq,
 		uint32_t id, uint32_t index, uint32_t next,
 		const struct spa_pod *param)
 {
-	struct proxy_data *data = object;
-	pw_log_debug(NAME" %p: port %u param %d index:%d", data, data->id, id, index);
-	add_param(&data->param_list, id, param);
+	struct global *gl = object;
+	pw_log_debug(NAME" %p: port %u param %d index:%d", gl, gl->id, id, index);
+	add_param(&gl->param_list, id, param);
 }
 
 static const struct pw_port_events port_events = {
@@ -1086,18 +1166,25 @@ static const struct pw_port_events port_events = {
 	.param = port_event_param,
 };
 
+static void port_params(void *object, uint32_t id)
+{
+	struct global *gl = object;
+	pw_port_enum_params((struct pw_port*)gl->proxy,
+			1, id, 0, UINT32_MAX, NULL);
+}
+
 static void port_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_port_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_port_info_free(gl->info);
 }
 
 
 static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	struct pw_port_info *i = node->extra[1].p;
-	struct spa_list *param_list = node->extra[2].p;
+	struct global *gl = node->extra[1].p;
+	struct pw_port_info *i = gl->info;
 	static const struct mask_table change_mask[] = {
 		{ PW_PORT_CHANGE_MASK_PROPS, "props" },
 		{ PW_PORT_CHANGE_MASK_PARAMS, "params" },
@@ -1118,7 +1205,7 @@ static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
 		ot_set_props(sub, "props", i->props);
 		break;
 	case 4:
-		ot_set_param_info(sub, "params", i->params, i->n_params, param_list);
+		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -1128,11 +1215,10 @@ static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_port_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_port_iterate);
+	struct global *gl = data;
+	ot_set_object(node, k, ot_port_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
-	node->extra[2].p = &pd->param_list;
+	node->extra[1].p = gl;
 }
 
 static const struct object_info port_info = {
@@ -1140,7 +1226,8 @@ static const struct object_info port_info = {
 	.version = PW_VERSION_PORT,
 	.events = &port_events,
 	.destroy = port_destroy,
-	.enter = &ot_port_info_enter
+	.enter = ot_port_info_enter,
+	.params = port_params
 };
 
 /**
@@ -1148,10 +1235,10 @@ static const struct object_info port_info = {
  */
 static void link_event_info(void *object, const struct pw_link_info *info)
 {
-	struct proxy_data *data = object;
-	pw_log_debug(NAME" %p: link %u info", data, data->id);
-	data->info = pw_link_info_update(data->info, info);
-	core_sync(data->data);
+	struct global *gl = object;
+	pw_log_debug(NAME" %p: link %u info", gl, gl->id);
+	gl->info = pw_link_info_update(gl->info, info);
+	core_sync(gl->data);
 }
 
 static const struct pw_link_events link_events = {
@@ -1161,9 +1248,9 @@ static const struct pw_link_events link_events = {
 
 static void link_destroy(void *object)
 {
-	struct proxy_data *data = object;
-	if (data->info)
-		pw_link_info_free(data->info);
+	struct global *gl = object;
+	if (gl->info)
+		pw_link_info_free(gl->info);
 }
 
 static int ot_link_iterate(struct ot_node *node, struct ot_node *sub)
@@ -1215,10 +1302,10 @@ static int ot_link_iterate(struct ot_node *node, struct ot_node *sub)
 
 static void ot_link_info_enter(void *data, const char *k, struct ot_node *node)
 {
-	const struct proxy_data *pd = data;
-	ot_set_object(node, k, &ot_link_iterate);
+	const struct global *gl = data;
+	ot_set_object(node, k, ot_link_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd->info;
+	node->extra[1].p = gl->info;
 }
 
 static const struct object_info link_info = {
@@ -1226,7 +1313,7 @@ static const struct object_info link_info = {
 	.version = PW_VERSION_LINK,
 	.events = &link_events,
 	.destroy = link_destroy,
-	.enter = &ot_link_info_enter,
+	.enter = ot_link_info_enter,
 };
 
 static void on_core_done(void *data, uint32_t id, int seq)
@@ -1246,28 +1333,29 @@ static const struct mask_table ot_permission_masks[] = {
 
 static int ot_global_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	struct proxy_data *pd = node->extra[1].p;
+	struct global *gl = node->extra[1].p;
 
 	switch(node->extra[0].i++) {
 	case 0:
-		ot_set_int(sub, "id", pd->id);
+		ot_set_int(sub, "id", gl->id);
 		break;
 	case 1:
-		ot_set_string(sub, "type", pd->object_info->type);
+		ot_set_string(sub, "type", gl->type);
 		break;
 	case 2:
-		ot_set_int(sub, "version", pd->version);
+		ot_set_int(sub, "version", gl->version);
 		break;
 	case 3:
-		ot_set_mask(sub, "permissions", pd->permissions, ot_permission_masks);
+		ot_set_mask(sub, "permissions", gl->permissions, ot_permission_masks);
 		break;
 	case 4:
-		ot_set_props(sub, "properties", &pd->props->dict);
+		if (gl->props)
+			ot_set_props(sub, "properties", &gl->props->dict);
+		else
+			ot_set_null(sub, "properties");
 		break;
 	case 5:
-		if (pd->object_info->enter == NULL)
-			return 0;
-		pd->object_info->enter(pd, "info", sub);
+		ot_set_global_info(sub, "info", gl);
 		break;
 	default:
 		return 0;
@@ -1275,16 +1363,16 @@ static int ot_global_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_global_enter(struct proxy_data *pd, const char *k, struct ot_node *node)
+static void ot_global_enter(struct global *gl, const char *k, struct ot_node *node)
 {
 	ot_set_object(node, k, ot_global_iterate);
 	node->extra[0].i = 0;
-	node->extra[1].p = pd;
+	node->extra[1].p = gl;
 }
 
 static int ot_root_iterate(struct ot_node *node, struct ot_node *sub)
 {
-	struct proxy_data *current = node->extra[0].p;
+	struct global *current = node->extra[0].p;
 
 	if (spa_list_is_end(current, node->extra[1].p, link))
 		return 0;
@@ -1296,29 +1384,11 @@ static int ot_root_iterate(struct ot_node *node, struct ot_node *sub)
 
 static inline void ot_root_enter(struct data *data, const char *k, struct ot_node *node)
 {
-	struct spa_list *list = &data->proxy_list;
+	struct spa_list *list = &data->global_list;
 	ot_set_array(node, k, ot_root_iterate);
-	node->extra[0].p = spa_list_first(list, struct proxy_data, link);
+	node->extra[0].p = spa_list_first(list, struct global, link);
 	node->extra[1].p = list;
 }
-
-static void
-destroy_proxy (void *data)
-{
-        struct proxy_data *pd = data;
-
-	clear_params(&pd->param_list, SPA_ID_INVALID);
-
-	if (pd->object_info->destroy)
-		pd->object_info->destroy(pd->info);
-
-	spa_list_remove(&pd->link);
-}
-
-static const struct pw_proxy_events proxy_events = {
-	PW_VERSION_PROXY_EVENTS,
-	.destroy = destroy_proxy,
-};
 
 static const struct object_info *objects[] =
 {
@@ -1349,39 +1419,23 @@ static void registry_event_global(void *data, uint32_t id,
 				  const struct spa_dict *props)
 {
         struct data *d = data;
-        struct pw_proxy *proxy;
-	struct proxy_data *pd;
-	const struct object_info *info;
+	struct global *gl;
 
-	info = find_info(type, version);
-	if (info == NULL) {
-		pw_log_error("unknown type %s", type);
+	gl = calloc(1, sizeof(*gl));
+	if (gl == NULL) {
+		pw_log_error("can't alloc global for %u %s/%d: %m", id, type, version);
 		return;
 	}
+	gl->data = d;
+	gl->id = id;
+	gl->permissions = permissions;
+	gl->type = strdup(type);
+	gl->version = version;
+	gl->props = props ? pw_properties_new_dict(props) : NULL;
+	gl->object_info = find_info(type, version);
+	spa_list_init(&gl->param_list);
 
-        proxy = pw_registry_bind(d->registry, id, type,
-				       info->version, sizeof(struct proxy_data));
-        if (proxy == NULL)
-                goto no_mem;
-
-	pd = pw_proxy_get_user_data(proxy);
-	pd->data = d;
-	pd->proxy = proxy;
-	pd->id = id;
-	pd->permissions = permissions;
-	pd->version = version;
-	pd->object_info = info;
-	pd->props = props ? pw_properties_new_dict(props) : NULL;
-	spa_list_init(&pd->param_list);
-
-	spa_list_append(&d->proxy_list, &pd->link);
-
-        pw_proxy_add_object_listener(proxy, &pd->object_listener, info->events, pd);
-        pw_proxy_add_listener(proxy, &pd->proxy_listener, &proxy_events, pd);
-        return;
-
-      no_mem:
-        printf("failed to create proxy");
+	spa_list_append(&d->global_list, &gl->link);
         return;
 }
 
@@ -1441,7 +1495,7 @@ int main(int argc, char *argv[])
 	if (data.context == NULL)
 		return -1;
 
-	spa_list_init(&data.proxy_list);
+	spa_list_init(&data.global_list);
 
 	if (argc > 1)
 		props = pw_properties_new(PW_KEY_REMOTE_NAME, argv[1], NULL);
@@ -1459,10 +1513,11 @@ int main(int argc, char *argv[])
 			&data.registry_listener,
 			&registry_events, &data);
 
-	pw_main_loop_run(data.loop);
+	core_roundtrip(&data);
 
+	spa_zero(root);
 	ot_root_enter(&data, NULL, &root);
-	ot_json_dump(&root, 0);
+	ot_json_dump(&root, 2);
 
 	pw_context_destroy(data.context);
 	pw_main_loop_destroy(data.loop);
