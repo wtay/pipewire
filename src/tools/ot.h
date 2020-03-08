@@ -1,6 +1,6 @@
 /* PipeWire
  *
- * Copyright © 2018 Wim Taymans
+ * Copyright © 2020 Wim Taymans
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
@@ -55,26 +55,20 @@ union ot_val {
 struct ot_node {
 	enum ot_type type;
 
-#define NODE_FLAG_FLAT (1<<0)
-#define NODE_FLAG_EXPENSIVE (1<<1)
+#define NODE_FLAG_FLAT (1<<0)		/**< suggest flat display */
+#define NODE_FLAG_EXPENSIVE (1<<1)	/**< expensive container to enter */
 	uint32_t flags;
 
-	const char *k;
-	union ot_val v;
+	const char *k;			/**< key is set when in object */
+	union ot_val v;			/**< value of node */
 
 	int (*iterate) (struct ot_node *node, struct ot_node *sub);
 
+	int32_t index;
+	/* private state */
 	union ot_val extra[8];
 	char buffer[64];
 };
-
-#define ot_node_iterate(node,sub)					\
-({									\
-	int res = 0;							\
-	if ((node)->iterate)						\
-		res = (node)->iterate(node, sub);			\
-	res;								\
-})
 
 #define OT_INIT_NULL(_k)	(struct ot_node){ .type = OT_NULL, .k = _k }
 #define OT_INIT_BOOL(_k,_v)	(struct ot_node){ .type = OT_BOOL, .k = _k, .v.b = _v }
@@ -86,52 +80,16 @@ struct ot_node {
 #define OT_INIT_ARRAY(_k,_i)	(struct ot_node){ .type = OT_ARRAY, .k = _k, .iterate = _i }
 #define OT_INIT_OBJECT(_k,_i)	(struct ot_node){ .type = OT_OBJECT, .k = _k, .iterate = _i }
 
-static inline void ot_set_null(struct ot_node *node, const char *k)
-{
-	*node = OT_INIT_NULL(k);
-}
-
-static inline void ot_set_bool(struct ot_node *node, const char *k, bool val)
-{
-	*node = OT_INIT_BOOL(k, val);
-}
-
-static inline void ot_set_int(struct ot_node *node, const char *k, int32_t val)
-{
-	*node = OT_INIT_INT(k, val);
-}
-
-static inline void ot_set_long(struct ot_node *node, const char *k, int64_t val)
-{
-	*node = OT_INIT_LONG(k, val);
-}
-
-static inline void ot_set_float(struct ot_node *node, const char *k, double val)
-{
-	*node = OT_INIT_FLOAT(k, val);
-}
-
-static inline void ot_set_double(struct ot_node *node, const char *k, double val)
-{
-	*node = OT_INIT_DOUBLE(k, val);
-}
-
-static inline void ot_set_string(struct ot_node *node, const char *k, const char *val)
-{
-	*node = OT_INIT_STRING(k, val);
-}
-
-static inline void ot_set_array(struct ot_node *node, const char *k,
-		int (*iterate) (struct ot_node *node, struct ot_node *sub))
-{
-	*node = OT_INIT_ARRAY(k, iterate);
-}
-
-static inline void ot_set_object(struct ot_node *node, const char *k,
-		int (*iterate) (struct ot_node *node, struct ot_node *sub))
-{
-	*node = OT_INIT_OBJECT(k, iterate);
-}
+/** iterate over node
+ *  \returns 1 when a new item is returned in sub, 0 when finished.
+ */
+#define ot_node_iterate(node,sub)					\
+({									\
+	int res = 0;							\
+	if ((node)->iterate)						\
+		res = (node)->iterate(node, sub);			\
+	res;								\
+})
 
 #ifdef __cplusplus
 }

@@ -84,9 +84,19 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 			l0 = ctx->l0;
 			ctx->l0 = (node->flags & NODE_FLAG_FLAT) ? 0 : ctx->l1;
 
+#if 0
+			node->index = -1;
+#else
+			node->index = 0;
+#endif
 			while (ot_node_iterate(node, &sub)) {
 				OUT("%s %s", i++ > 0 ? "," : "", ctx->l0 ? "\n" : "");
 				ot_json_dump2(&sub, ctx);
+#if 0
+				node->index--;
+#else
+				node->index++;
+#endif
 			}
 			ctx->l1--;
 			ctx->l0 = l0;

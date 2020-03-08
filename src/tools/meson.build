@@ -40,6 +40,7 @@ executable('pw-metadata',
 
 executable('pw-dump',
 	'pw-dump.c',
+	'tree.c',
 	c_args : [ '-D_GNU_SOURCE' ],
 	install: true,
 	dependencies : [pipewire_dep],
