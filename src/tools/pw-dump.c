@@ -36,6 +36,7 @@
 #include "ot.h"
 #include "json.h"
 #include "tree.h"
+#include "query.h"
 
 #define NAME "dump"
 
@@ -95,17 +96,14 @@ static void do_quit(void *data, int signal_number)
 
 static void tree_added(void *data, const char *path)
 {
-	printf("added %s\n", path);
 }
 
 static void tree_updated(void *data, const char *path)
 {
-	printf("updated %s\n", path);
 }
 
 static void tree_removed(void *data, const char *path)
 {
-	printf("removed %s\n", path);
 }
 
 static const struct pw_tree_events tree_events = {
@@ -120,7 +118,7 @@ int main(int argc, char *argv[])
 	struct data data = { 0 };
 	struct pw_loop *l;
 	struct pw_properties *props = NULL;
-	struct ot_node root;
+	struct ot_node root, result;
 
 	pw_init(&argc, &argv);
 
@@ -155,7 +153,10 @@ int main(int argc, char *argv[])
 	core_roundtrip(&data);
 
 	pw_tree_get_root(data.tree, &root);
-	ot_json_dump(&root, 2);
+
+	ot_query_begin(&root, ".[0]", &result);
+	ot_json_dump(&result, 2);
+	ot_query_end(&result);
 
 	pw_context_destroy(data.context);
 	pw_main_loop_destroy(data.loop);
