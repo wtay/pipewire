@@ -27,7 +27,10 @@
 
 #ifdef __cplusplus
 extern "C" {
+#else
+#include <stdbool.h>
 #endif
+#include <inttypes.h>
 
 enum ot_type {
 	OT_NULL,
@@ -59,12 +62,13 @@ struct ot_node {
 #define NODE_FLAG_EXPENSIVE (1<<1)	/**< expensive container to enter */
 	uint32_t flags;
 
+	int32_t index;			/**< index of subnode to retrieve,
+					  *  < 0 for count from last */
 	const char *k;			/**< key is set when in object */
 	union ot_val v;			/**< value of node */
 
 	int (*iterate) (struct ot_node *node, struct ot_node *sub);
 
-	int32_t index;
 	/* private state */
 	union ot_val extra[8];
 	char buffer[64];
