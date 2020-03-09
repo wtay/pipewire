@@ -29,13 +29,23 @@
 extern "C" {
 #endif
 
+#include <unistd.h>
+
 #include "ot.h"
 
 struct ot_json_ctx {
 	int l0, l1;
 	int expensive;
 	int cutoff;
+	unsigned int colors:1;
 };
+
+#define NORMAL	(ctx->colors?"\x1B[0m":"")
+#define NUL	(ctx->colors?"\x1B[95m":"")
+#define BOOL	(ctx->colors?"\x1B[95m":"")
+#define NUMBER	(ctx->colors?"\x1B[96m":"")
+#define STRING	(ctx->colors?"\x1B[92m":"")
+#define KEY	(ctx->colors?"\x1B[94m":"")
 
 static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 {
@@ -44,27 +54,30 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 #define OUT(fmt,...)		printf(fmt, ##__VA_ARGS__)
 #define IND(fmt,level,...)	printf("%*s"fmt, (level)*2, "", ##__VA_ARGS__)
 	if (node->k) {
-		IND("\"%s\": ", l0, node->k);
+		IND("%s\"%s\"%s: ", l0, KEY, node->k, NORMAL);
 		l0 = 0;
 	}
 	switch (node->type) {
 	case OT_NULL:
-		IND("null", l0);
+		IND("%snull%s", l0, NUL, NORMAL);
 		break;
 	case OT_BOOL:
-		IND("%s", l0, node->v.b ? "true" : "false");
+		IND("%s%s%s", l0, BOOL, node->v.b ? "true" : "false", NORMAL);
 		break;
 	case OT_INT:
-		IND("%d", l0, node->v.i);
+		IND("%s%d%s", l0, NUMBER, node->v.i, NORMAL);
 		break;
 	case OT_LONG:
-		IND("%"PRIi64, l0, node->v.l);
+		IND("%s%"PRIi64"%s", l0, NUMBER, node->v.l, NORMAL);
+		break;
+	case OT_FLOAT:
+		IND("%s%f%s", l0, NUMBER, node->v.f, NORMAL);
 		break;
 	case OT_DOUBLE:
-		IND("%f", l0, node->v.d);
+		IND("%s%f%s", l0, NUMBER, node->v.d, NORMAL);
 		break;
 	case OT_STRING:
-		IND("\"%s\"", l0, node->v.s);
+		IND("%s\"%s\"%s", l0, STRING, node->v.s, NORMAL);
 		break;
 	case OT_ARRAY:
 	case OT_OBJECT:
@@ -124,6 +137,8 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 static inline int ot_json_dump(struct ot_node *node, int cutoff)
 {
 	struct ot_json_ctx ctx = { 0, 0, 0, cutoff };
+	if (isatty(STDOUT_FILENO))
+		ctx.colors = true;
 	return ot_json_dump2(node, &ctx);
 }
 
