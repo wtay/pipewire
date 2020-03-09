@@ -22,17 +22,48 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
+#include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "query.h"
 
+struct context {
+	struct ot_node *root;
+	char *query;
+};
+
+static int result_iterate(struct ot_node *node, struct ot_node *sub)
+{
+	struct context *ctx = node->extra[0].p;
+	int index;
+
+	if ((index = node->index) < 0)
+		index += 1;
+	if (index < 0 || index > 0)
+		return 0;
+
+	*sub = *ctx->root;
+	return 1;
+}
+
 int ot_query_begin(struct ot_node *root, const char *query, struct ot_node *result)
 {
-	memset(result, 0, sizeof(*result));
-	*result = *root;
+	struct context *ctx;
+
+	if ((ctx = calloc(1, sizeof(*ctx))) == NULL)
+		return -errno;
+
+	ctx->root = root;
+	ctx->query = strdup(query);
+
+	*result = OT_INIT_ARRAY(NULL, result_iterate);
+	result->extra[0].p = ctx;
+
 	return 0;
 }
 
 void ot_query_end(struct ot_node *result)
 {
+	free(result->extra[0].p);
 }
