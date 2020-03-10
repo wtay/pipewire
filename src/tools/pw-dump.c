@@ -119,6 +119,7 @@ int main(int argc, char *argv[])
 	struct pw_loop *l;
 	struct pw_properties *props = NULL;
 	struct ot_node root, result;
+	struct ot_path path[5];
 
 	pw_init(&argc, &argv);
 
@@ -154,7 +155,12 @@ int main(int argc, char *argv[])
 
 	pw_tree_get_root(data.tree, &root);
 
-	ot_query_begin(&root, ".[0]", &result);
+	path[0] = OT_INIT_MATCH_SLICE(0,1,1);
+	path[1] = OT_INIT_MATCH_KEY("info");
+	path[2] = OT_INIT_MATCH_ALL();
+	path[3] = OT_INIT_MATCH_KEY("object.id");
+
+	ot_query_begin(&root, path, 1, &result);
 	ot_json_dump(&result, 2);
 	ot_query_end(&result);
 

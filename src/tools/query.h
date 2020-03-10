@@ -31,7 +31,32 @@ extern "C" {
 
 #include "ot.h"
 
-int ot_query_begin(struct ot_node *root, const char *query, struct ot_node *result);
+enum ot_match {
+	OT_MATCH_DEEP,
+	OT_MATCH_SLICE,
+	OT_MATCH_KEY,
+};
+
+struct ot_path {
+	enum ot_match type;
+	struct {
+		int32_t start;
+		int32_t end;
+		int32_t step;
+	} slice;
+	const char *key;
+	struct ot_node *root;
+	struct ot_node current;
+	int (*check) (struct ot_path *path);
+	void *data;
+};
+
+#define OT_INIT_MATCH_ALL() (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { 0, -1, 1 } }
+#define OT_INIT_MATCH_INDEX(i) (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { i, i, 1 } }
+#define OT_INIT_MATCH_SLICE(s,e,st) (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { s, e, st } }
+#define OT_INIT_MATCH_KEY(k) (struct ot_path){ .type = OT_MATCH_KEY, .slice = { 0, -1, 1 }, .key = k }
+
+int ot_query_begin(struct ot_node *root, struct ot_path *path, uint32_t n_path, struct ot_node *result);
 
 void ot_query_end(struct ot_node *result);
 
