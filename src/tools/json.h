@@ -53,8 +53,8 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 
 #define OUT(fmt,...)		printf(fmt, ##__VA_ARGS__)
 #define IND(fmt,level,...)	printf("%*s"fmt, (level)*2, "", ##__VA_ARGS__)
-	if (node->k) {
-		IND("%s\"%s\"%s: ", l0, KEY, node->k, NORMAL);
+	if (node->k.val) {
+		IND("%s\"%*s\"%s: ", l0, KEY, node->k.len, node->k.val, NORMAL);
 		l0 = 0;
 	}
 	switch (node->type) {
@@ -77,7 +77,7 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 		IND("%s%f%s", l0, NUMBER, node->v.d, NORMAL);
 		break;
 	case OT_STRING:
-		IND("%s\"%s\"%s", l0, STRING, node->v.s, NORMAL);
+		IND("%s\"%*s\"%s", l0, STRING, node->v.s.len, node->v.s.val, NORMAL);
 		break;
 	case OT_ARRAY:
 	case OT_OBJECT:

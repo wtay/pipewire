@@ -44,13 +44,18 @@ enum ot_type {
 	OT_OBJECT,
 };
 
+struct ot_string {
+	int len;
+	const char *val;
+};
+
 union ot_val {
 	bool b;
 	int32_t i;
 	int64_t l;
 	float f;
 	double d;
-	const char *s;
+	struct ot_string s;
 	const void *cp;
 	void *p;
 };
@@ -64,7 +69,7 @@ struct ot_node {
 
 	int32_t index;			/**< index of subnode to retrieve,
 					  *  < 0 for count from last */
-	const char *k;			/**< key is set when in object */
+	struct ot_string k;		/**< key is set when in object */
 	union ot_val v;			/**< value of node */
 
 	int (*iterate) (struct ot_node *node, struct ot_node *sub);
@@ -74,15 +79,15 @@ struct ot_node {
 	char buffer[64];
 };
 
-#define OT_INIT_NULL(_k)	(struct ot_node){ .type = OT_NULL, .k = _k }
-#define OT_INIT_BOOL(_k,_v)	(struct ot_node){ .type = OT_BOOL, .k = _k, .v.b = _v }
-#define OT_INIT_INT(_k,_v)	(struct ot_node){ .type = OT_INT, .k = _k, .v.i = _v }
-#define OT_INIT_LONG(_k,_v)	(struct ot_node){ .type = OT_LONG, .k = _k, .v.l = _v }
-#define OT_INIT_FLOAT(_k,_v)	(struct ot_node){ .type = OT_FLOAT, .k = _k, .v.f = _v }
-#define OT_INIT_DOUBLE(_k,_v)	(struct ot_node){ .type = OT_DOUBLE, .k = _k, .v.d = _v }
-#define OT_INIT_STRING(_k,_v)	(struct ot_node){ .type = _v ? OT_STRING : OT_NULL, .k = _k, .v.s = _v }
-#define OT_INIT_ARRAY(_k,_i)	(struct ot_node){ .type = OT_ARRAY, .k = _k, .iterate = _i }
-#define OT_INIT_OBJECT(_k,_i)	(struct ot_node){ .type = OT_OBJECT, .k = _k, .iterate = _i }
+#define OT_INIT_NULL(_k)	(struct ot_node){ .type = OT_NULL, .k = { -1, _k } }
+#define OT_INIT_BOOL(_k,_v)	(struct ot_node){ .type = OT_BOOL, .k = { -1, _k }, .v.b = _v }
+#define OT_INIT_INT(_k,_v)	(struct ot_node){ .type = OT_INT, .k = { -1, _k }, .v.i = _v }
+#define OT_INIT_LONG(_k,_v)	(struct ot_node){ .type = OT_LONG, .k = { -1, _k }, .v.l = _v }
+#define OT_INIT_FLOAT(_k,_v)	(struct ot_node){ .type = OT_FLOAT, .k = { -1, _k }, .v.f = _v }
+#define OT_INIT_DOUBLE(_k,_v)	(struct ot_node){ .type = OT_DOUBLE, .k = { -1, _k }, .v.d = _v }
+#define OT_INIT_STRING(_k,_v)	(struct ot_node){ .type = _v ? OT_STRING : OT_NULL, .k = { -1, _k }, .v.s = { -1, _v } }
+#define OT_INIT_ARRAY(_k,_i)	(struct ot_node){ .type = OT_ARRAY, .k = { -1, _k} , .iterate = _i }
+#define OT_INIT_OBJECT(_k,_i)	(struct ot_node){ .type = OT_OBJECT, .k = { -1, _k }, .iterate = _i }
 
 /** iterate over node
  *  \returns 1 when a new item is returned in sub, 0 when finished.

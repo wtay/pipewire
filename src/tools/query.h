@@ -31,34 +31,50 @@ extern "C" {
 
 #include "ot.h"
 
-enum ot_match {
+enum ot_match_type {
 	OT_MATCH_DEEP,
 	OT_MATCH_SLICE,
+	OT_MATCH_INDEXES,
 	OT_MATCH_KEY,
+	OT_MATCH_KEYS,
 };
 
-struct ot_path {
-	enum ot_match type;
+union ot_match {
 	struct {
 		int32_t start;
 		int32_t end;
 		int32_t step;
 	} slice;
 	const char *key;
-	struct ot_node *root;
+	struct {
+		int32_t *indexes;
+		int32_t n_indexes;
+	} indexes;
+	struct {
+		const char **keys;
+		int32_t n_keys;
+	} keys;
+};
+
+struct ot_step {
+	enum ot_match_type type;
+	union ot_match match;
+	struct ot_node *parent;
 	struct ot_node current;
-	int (*check) (struct ot_path *path);
+	int (*check) (struct ot_step *path);
 	void *data;
 };
 
-#define OT_INIT_MATCH_ALL() (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { 0, -1, 1 } }
-#define OT_INIT_MATCH_INDEX(i) (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { i, i, 1 } }
-#define OT_INIT_MATCH_SLICE(s,e,st) (struct ot_path){ .type = OT_MATCH_SLICE, .slice = { s, e, st } }
-#define OT_INIT_MATCH_KEY(k) (struct ot_path){ .type = OT_MATCH_KEY, .slice = { 0, -1, 1 }, .key = k }
+#define OT_INIT_MATCH_ALL() (struct ot_step){ .type = OT_MATCH_SLICE, .match.slice = { 0, -1, 1 } }
+#define OT_INIT_MATCH_INDEX(i) (struct ot_step){ .type = OT_MATCH_SLICE, .match.slice = { (i), (i)+1, 1 } }
+#define OT_INIT_MATCH_INDEXES(idx,n_idx) (struct ot_step){ .type = OT_MATCH_INDEXES, .match.indexes = { idx, n_idx } }
+#define OT_INIT_MATCH_SLICE(s,e,st) (struct ot_step){ .type = OT_MATCH_SLICE, .match.slice = { s, e, st } }
+#define OT_INIT_MATCH_KEY(k) (struct ot_step){ .type = OT_MATCH_KEY, .match.key = k }
+#define OT_INIT_MATCH_KEYS(keys,n_keys) (struct ot_step){ .type = OT_MATCH_KEYS, .match.keys = { keys, n_keys } }
 
-int ot_query_begin(struct ot_node *root, struct ot_path *path, uint32_t n_path, struct ot_node *result);
+int ot_path_begin(struct ot_node *root, struct ot_step *steps, uint32_t n_steps, struct ot_node *result);
 
-void ot_query_end(struct ot_node *result);
+void ot_path_end(struct ot_node *result);
 
 #ifdef __cplusplus
 }

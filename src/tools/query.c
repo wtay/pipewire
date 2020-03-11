@@ -30,8 +30,8 @@
 #include "query.h"
 
 struct context {
-	struct ot_path *path;
-	uint32_t n_path;
+	struct ot_step *steps;
+	uint32_t n_steps;
 	int32_t depth;
 	struct ot_node *root;
 };
@@ -42,68 +42,92 @@ static int iterate_one(struct ot_node *node, struct ot_node *sub)
 	if (node->index < -1 || node->index > 0)
 		return 0;
 	*sub = *ctx->root;
-	sub->k = NULL;
+	sub->k.val = NULL;
 	return 1;
 }
 
-static void enter_path(struct context *ctx, struct ot_node *root, int32_t depth)
+static void enter_step(struct context *ctx, struct ot_node *parent, int32_t depth)
 {
-	struct ot_path *next;
+	struct ot_step *next;
 	ctx->depth = depth;
-	next = &ctx->path[depth];
-	next->root = root;
-	next->root->index = next->slice.start;
+	next = &ctx->steps[depth];
+	next->parent = parent;
+	next->parent->index = next->type == OT_MATCH_SLICE ? next->match.slice.start : 0;
 }
 
-static int iterate_path(struct ot_node *node, struct ot_node *sub)
+static int iterate_steps(struct ot_node *node, struct ot_node *sub)
 {
 	struct context *ctx = node->extra[0].p;
 	uint32_t depth;
-	struct ot_path *path;
-	struct ot_node *root;
+	struct ot_step *step;
+	struct ot_node *parent;
+	union ot_match *match, mtch;
 	int32_t index;
 	int res;
 again:
 	depth = ctx->depth;
-	path = &ctx->path[depth];
-	root = path->root;
+	step = &ctx->steps[depth];
+	parent = step->parent;
+	match = &step->match;
 
-	switch (path->type) {
+	switch (step->type) {
 	case OT_MATCH_DEEP:
 		break;
 	case OT_MATCH_SLICE:
-		index = root->index;
-		if ((path->slice.end >= 0 && index >= path->slice.end) ||
-		    (path->slice.end < 0 && index <= path->slice.end))
+		index = parent->index;
+		if ((match->slice.end >= 0 && index >= match->slice.end) ||
+		    (match->slice.end < 0 && index <= match->slice.end))
 			goto back;
-		if ((res = ot_node_iterate(root, &path->current)) <= 0)
+		if ((res = ot_node_iterate(parent, &step->current)) <= 0)
 			goto back;
-		root->index += path->slice.step;
+		parent->index += match->slice.step;
+		break;
+	case OT_MATCH_INDEXES:
+		do {
+			index = parent->index;
+			if (index >= match->indexes.n_indexes)
+				goto back;
+			parent->index = match->indexes.indexes[index];
+			res = ot_node_iterate(parent, &step->current);
+			parent->index = index + 1;
+		} while (res <= 0);
 		break;
 	case OT_MATCH_KEY:
-		if (root->type != OT_OBJECT)
+		mtch.keys.n_keys = 1;
+		mtch.keys.keys = &match->key;
+		match = &mtch;
+		/* fallthrough */
+	case OT_MATCH_KEYS:
+		if (parent->type != OT_OBJECT)
 			goto back;
-		while (true) {
-			if ((res = ot_node_iterate(root, &path->current)) <= 0)
+		do {
+			index = parent->index;
+			if (index >= match->keys.n_keys)
 				goto back;
-			root->index++;
-			if (strcmp(path->current.k, path->key) == 0)
-				break;
-		}
+			parent->index = 0;
+			do {
+				if ((res = ot_node_iterate(parent, &step->current)) <= 0)
+					break;
+				parent->index++;
+			} while (strncmp(step->current.k.val,
+						match->keys.keys[index],
+						step->current.k.len) != 0);
+			parent->index = index + 1;
+		} while (res <= 0);
 		break;
 	default:
 		goto back;
 	}
-	if (path->check != NULL &&
-	    !path->check(path))
+	if (step->check != NULL &&
+	    !step->check(step))
 		goto again;
 
-	if (++depth < ctx->n_path) {
-		enter_path(ctx, &path->current, depth);
+	if (++depth < ctx->n_steps) {
+		enter_step(ctx, &step->current, depth);
 		goto again;
 	} else {
-		*sub = path->current;
-		sub->k = NULL;
+		*sub = step->current;
+		sub->k.val = NULL;
 		return 1;
 	}
 back:
@@ -113,27 +137,27 @@ back:
 	goto again;
 }
 
-int ot_query_begin(struct ot_node *root, struct ot_path *path, uint32_t n_path, struct ot_node *result)
+int ot_path_begin(struct ot_node *root, struct ot_step *steps, uint32_t n_steps, struct ot_node *result)
 {
 	struct context *ctx;
 
 	if ((ctx = calloc(1, sizeof(*ctx))) == NULL)
 		return -errno;
 
-	ctx->path = path;
-	ctx->n_path = n_path;
+	ctx->steps = steps;
+	ctx->n_steps = n_steps;
 	ctx->root = root;
 
-	*result = OT_INIT_ARRAY(NULL, n_path > 0 ? iterate_path : iterate_one);
+	*result = OT_INIT_ARRAY(NULL, n_steps > 0 ? iterate_steps : iterate_one);
 	result->extra[0].p = ctx;
 
-	if (n_path > 0)
-		enter_path(ctx, root, 0);
+	if (n_steps > 0)
+		enter_step(ctx, root, 0);
 
 	return 0;
 }
 
-void ot_query_end(struct ot_node *result)
+void ot_path_end(struct ot_node *result)
 {
 	free(result->extra[0].p);
 }
