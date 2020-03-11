@@ -27,7 +27,9 @@
 #include <errno.h>
 #include <spa/utils/defs.h>
 
-#include "query.h"
+#include "path.h"
+
+#define NODE_CONTEXT(n)		((n)->extra[0].p)
 
 struct context {
 	struct ot_step *steps;
@@ -38,7 +40,7 @@ struct context {
 
 static int iterate_one(struct ot_node *node, struct ot_node *sub)
 {
-	struct context *ctx = node->extra[0].p;
+	struct context *ctx = NODE_CONTEXT(node);
 	if (node->index < -1 || node->index > 0)
 		return 0;
 	*sub = *ctx->root;
@@ -46,50 +48,51 @@ static int iterate_one(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void enter_step(struct context *ctx, struct ot_node *parent, int32_t depth)
+static void enter_step(struct context *ctx, struct ot_node *node, int32_t depth)
 {
 	struct ot_step *next;
 	ctx->depth = depth;
 	next = &ctx->steps[depth];
-	next->parent = parent;
-	next->parent->index = next->type == OT_MATCH_SLICE ? next->match.slice.start : 0;
+	next->parent = depth > 0 ? &ctx->steps[depth-1] : NULL;
+	next->node = node;
+	next->node->index = next->type == OT_MATCH_SLICE ? next->match.slice.start : 0;
 }
 
-static int iterate_steps(struct ot_node *node, struct ot_node *sub)
+static int iterate_steps(struct ot_node *n, struct ot_node *sub)
 {
-	struct context *ctx = node->extra[0].p;
+	struct context *ctx = NODE_CONTEXT(n);
 	uint32_t depth;
 	struct ot_step *step;
-	struct ot_node *parent;
+	struct ot_node *node;
 	union ot_match *match, mtch;
 	int32_t index;
 	int res;
 again:
 	depth = ctx->depth;
 	step = &ctx->steps[depth];
-	parent = step->parent;
+	node = step->node;
 	match = &step->match;
 
 	switch (step->type) {
 	case OT_MATCH_DEEP:
 		break;
 	case OT_MATCH_SLICE:
-		index = parent->index;
+		index = node->index;
 		if ((match->slice.end >= 0 && index >= match->slice.end) ||
 		    (match->slice.end < 0 && index <= match->slice.end))
 			goto back;
-		if ((res = ot_node_iterate(parent, &step->current)) <= 0)
+		if ((res = ot_node_iterate(node, &step->current)) <= 0)
 			goto back;
-		parent->index += match->slice.step;
+		node->index += match->slice.step;
 		break;
 	case OT_MATCH_INDEXES:
 		do {
-			index = parent->index;
+			index = node->index;
 			if (index >= match->indexes.n_indexes)
 				goto back;
-			parent->index = match->indexes.indexes[index];
-			res = ot_node_iterate(parent, &step->current);
-			parent->index = index + 1;
+			node->index = match->indexes.indexes[index];
+			res = ot_node_iterate(node, &step->current);
+			node->index = index + 1;
 		} while (res <= 0);
 		break;
 	case OT_MATCH_KEY:
@@ -98,28 +101,28 @@ again:
 		match = &mtch;
 		/* fallthrough */
 	case OT_MATCH_KEYS:
-		if (parent->type != OT_OBJECT)
+		if (node->type != OT_OBJECT)
 			goto back;
 		do {
-			index = parent->index;
+			index = node->index;
 			if (index >= match->keys.n_keys)
 				goto back;
-			parent->index = 0;
+			node->index = 0;
 			do {
-				if ((res = ot_node_iterate(parent, &step->current)) <= 0)
+				if ((res = ot_node_iterate(node, &step->current)) <= 0)
 					break;
-				parent->index++;
+				node->index++;
 			} while (strncmp(step->current.k.val,
 						match->keys.keys[index],
 						step->current.k.len) != 0);
-			parent->index = index + 1;
+			node->index = index + 1;
 		} while (res <= 0);
 		break;
 	default:
 		goto back;
 	}
-	if (step->check != NULL &&
-	    !step->check(step))
+	if (step->filter != NULL &&
+	    !step->filter(step))
 		goto again;
 
 	if (++depth < ctx->n_steps) {
@@ -149,7 +152,7 @@ int ot_path_begin(struct ot_node *root, struct ot_step *steps, uint32_t n_steps,
 	ctx->root = root;
 
 	*result = OT_INIT_ARRAY(NULL, n_steps > 0 ? iterate_steps : iterate_one);
-	result->extra[0].p = ctx;
+	NODE_CONTEXT(result) = ctx;
 
 	if (n_steps > 0)
 		enter_step(ctx, root, 0);
@@ -159,5 +162,5 @@ int ot_path_begin(struct ot_node *root, struct ot_step *steps, uint32_t n_steps,
 
 void ot_path_end(struct ot_node *result)
 {
-	free(result->extra[0].p);
+	free(NODE_CONTEXT(result));;
 }

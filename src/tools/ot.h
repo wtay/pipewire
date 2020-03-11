@@ -63,8 +63,8 @@ union ot_val {
 struct ot_node {
 	enum ot_type type;
 
-#define NODE_FLAG_FLAT (1<<0)		/**< suggest flat display */
-#define NODE_FLAG_EXPENSIVE (1<<1)	/**< expensive container to enter */
+#define NODE_FLAG_FLAT		(1<<0)	/**< suggest flat display */
+#define NODE_FLAG_EXPENSIVE	(1<<1)	/**< expensive container to enter */
 	uint32_t flags;
 
 	int32_t index;			/**< index of subnode to retrieve,
@@ -79,15 +79,25 @@ struct ot_node {
 	char buffer[64];
 };
 
-#define OT_INIT_NULL(_k)	(struct ot_node){ .type = OT_NULL, .k = { -1, _k } }
-#define OT_INIT_BOOL(_k,_v)	(struct ot_node){ .type = OT_BOOL, .k = { -1, _k }, .v.b = _v }
-#define OT_INIT_INT(_k,_v)	(struct ot_node){ .type = OT_INT, .k = { -1, _k }, .v.i = _v }
-#define OT_INIT_LONG(_k,_v)	(struct ot_node){ .type = OT_LONG, .k = { -1, _k }, .v.l = _v }
-#define OT_INIT_FLOAT(_k,_v)	(struct ot_node){ .type = OT_FLOAT, .k = { -1, _k }, .v.f = _v }
-#define OT_INIT_DOUBLE(_k,_v)	(struct ot_node){ .type = OT_DOUBLE, .k = { -1, _k }, .v.d = _v }
-#define OT_INIT_STRING(_k,_v)	(struct ot_node){ .type = _v ? OT_STRING : OT_NULL, .k = { -1, _k }, .v.s = { -1, _v } }
-#define OT_INIT_ARRAY(_k,_i)	(struct ot_node){ .type = OT_ARRAY, .k = { -1, _k} , .iterate = _i }
-#define OT_INIT_OBJECT(_k,_i)	(struct ot_node){ .type = OT_OBJECT, .k = { -1, _k }, .iterate = _i }
+#define OT_INIT_NULLN(_k,_kl)		(struct ot_node){ .type = OT_NULL, .k = { _kl, _k } }
+#define OT_INIT_BOOLN(_k,_kl,_v)	(struct ot_node){ .type = OT_BOOL, .k = { _kl, _k }, .v.b = _v }
+#define OT_INIT_INTN(_k,_kl,_v)		(struct ot_node){ .type = OT_INT, .k = { _kl, _k }, .v.i = _v }
+#define OT_INIT_LONGN(_k,_kl,_v)	(struct ot_node){ .type = OT_LONG, .k = { _kl, _k }, .v.l = _v }
+#define OT_INIT_FLOATN(_k,_kl,_v)	(struct ot_node){ .type = OT_FLOAT, .k = { _kl, _k }, .v.f = _v }
+#define OT_INIT_DOUBLEN(_k,_kl,_v)	(struct ot_node){ .type = OT_DOUBLE, .k = { _kl, _k }, .v.d = _v }
+#define OT_INIT_STRINGN(_k,_kl,_v,_vl)	(struct ot_node){ .type = _v ? OT_STRING : OT_NULL, .k = { _kl, _k }, .v.s = { _vl, _v } }
+#define OT_INIT_ARRAYN(_k,_kl,_i)	(struct ot_node){ .type = OT_ARRAY, .k = { _kl, _k} , .iterate = _i }
+#define OT_INIT_OBJECTN(_k,_kl,_i)	(struct ot_node){ .type = OT_OBJECT, .k = { _kl, _k }, .iterate = _i }
+
+#define OT_INIT_NULL(_k)		OT_INIT_NULLN(_k,-1)
+#define OT_INIT_BOOL(_k,_v)		OT_INIT_BOOLN(_k,-1,_v)
+#define OT_INIT_INT(_k,_v)		OT_INIT_INTN(_k,-1,_v)
+#define OT_INIT_LONG(_k,_v)		OT_INIT_LONGN(_k,-1,_v)
+#define OT_INIT_FLOAT(_k,_v)		OT_INIT_FLOATN(_k,-1,_v)
+#define OT_INIT_DOUBLE(_k,_v)		OT_INIT_DOUBLEN(_k,-1,_v)
+#define OT_INIT_STRING(_k,_v)		OT_INIT_STRINGN(_k,-1,_v,-1)
+#define OT_INIT_ARRAY(_k,_i)		OT_INIT_ARRAYN(_k,-1,_i)
+#define OT_INIT_OBJECT(_k,_i)		OT_INIT_OBJECTN(_k,-1,_i)
 
 /** iterate over node
  *  \returns 1 when a new item is returned in sub, 0 when finished.

@@ -22,18 +22,13 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef PIPEWIRE_JSON_H
-#define PIPEWIRE_JSON_H
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #include <unistd.h>
+#include <stdio.h>
 
-#include "ot.h"
+#include "json-dump.h"
 
 struct ot_json_ctx {
+	FILE *out;
 	int l0, l1;
 	int expensive;
 	int cutoff;
@@ -50,11 +45,10 @@ struct ot_json_ctx {
 static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 {
 	int l0 = ctx->l0, l1 = ctx->l1;
-
-#define OUT(fmt,...)		printf(fmt, ##__VA_ARGS__)
-#define IND(fmt,level,...)	printf("%*s"fmt, (level)*2, "", ##__VA_ARGS__)
+#define OUT(fmt,...)		fprintf(ctx->out, fmt, ##__VA_ARGS__)
+#define IND(fmt,level,...)	fprintf(ctx->out, "%*s"fmt, (level)*2, "", ##__VA_ARGS__)
 	if (node->k.val) {
-		IND("%s\"%*s\"%s: ", l0, KEY, node->k.len, node->k.val, NORMAL);
+		IND("%s\"%.*s\"%s: ", l0, KEY, node->k.len, node->k.val, NORMAL);
 		l0 = 0;
 	}
 	switch (node->type) {
@@ -77,7 +71,7 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 		IND("%s%f%s", l0, NUMBER, node->v.d, NORMAL);
 		break;
 	case OT_STRING:
-		IND("%s\"%*s\"%s", l0, STRING, node->v.s.len, node->v.s.val, NORMAL);
+		IND("%s\"%.*s\"%s", l0, STRING, node->v.s.len, node->v.s.val, NORMAL);
 		break;
 	case OT_ARRAY:
 	case OT_OBJECT:
@@ -97,19 +91,11 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 			l0 = ctx->l0;
 			ctx->l0 = (node->flags & NODE_FLAG_FLAT) ? 0 : ctx->l1;
 
-#if 0
-			node->index = -1;
-#else
 			node->index = 0;
-#endif
 			while (ot_node_iterate(node, &sub)) {
 				OUT("%s %s", i++ > 0 ? "," : "", ctx->l0 ? "\n" : "");
 				ot_json_dump2(&sub, ctx);
-#if 0
-				node->index--;
-#else
 				node->index++;
-#endif
 			}
 			ctx->l1--;
 			ctx->l0 = l0;
@@ -134,16 +120,10 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 #undef OUT
 }
 
-static inline int ot_json_dump(struct ot_node *node, int cutoff)
+int ot_json_dump(FILE *out, struct ot_node *node, int cutoff)
 {
-	struct ot_json_ctx ctx = { 0, 0, 0, cutoff };
-	if (isatty(STDOUT_FILENO))
+	struct ot_json_ctx ctx = { .out = out, 0, 0, 0, cutoff };
+	if (isatty(fileno(out)))
 		ctx.colors = true;
 	return ot_json_dump2(node, &ctx);
 }
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* PIPEWIRE_JSON_H */

@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <float.h>
+#include <limits.h>
 
 #include <spa/utils/result.h>
 #include <spa/debug/pod.h>
@@ -270,8 +271,10 @@ static int ot_props_iterate(struct ot_node *node, struct ot_node *sub)
 {
 	const struct spa_dict *props = node->extra[0].p;
 	const char *key, *val;
-        char *end;
+	char *end;
 	int32_t index;
+	long long ll;
+	double d;
 
 	if ((index = node->index) < 0)
 		index += props->n_items;
@@ -289,15 +292,17 @@ static int ot_props_iterate(struct ot_node *node, struct ot_node *sub)
 	} else if (strcmp(val, "false") == 0) {
 		ot_set_bool(sub, key, false);
 	} else {
-		long long ll = strtoll(val, &end, 10);
-		if (*end == '\0') {
+		errno = 0;
+		ll = strtoll(val, &end, 10);
+		if (*end == '\0' && errno == 0) {
 	                if (ll < INT32_MIN || ll > INT32_MAX)
 				ot_set_long(sub, key, ll);
 			else
 				ot_set_int(sub, key, ll);
 		} else {
-			double d = strtod(val, &end);
-			if (*end == '\0')
+			errno = 0;
+			d = strtod(val, &end);
+			if (*end == '\0' && errno == 0)
 				ot_set_double(sub, key, d);
 			else
 				ot_set_string(sub, key, val);

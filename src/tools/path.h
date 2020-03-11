@@ -22,8 +22,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef PIPEWIRE_QUERY_H
-#define PIPEWIRE_QUERY_H
+#ifndef PIPEWIRE_PATH_H
+#define PIPEWIRE_PATH_H
 
 #ifdef __cplusplus
 extern "C" {
@@ -59,9 +59,10 @@ union ot_match {
 struct ot_step {
 	enum ot_match_type type;
 	union ot_match match;
-	struct ot_node *parent;
+	struct ot_step *parent;
+	struct ot_node *node;
 	struct ot_node current;
-	int (*check) (struct ot_step *path);
+	int (*filter) (struct ot_step *path);
 	void *data;
 };
 
@@ -80,4 +81,4 @@ void ot_path_end(struct ot_node *result);
 }
 #endif
 
-#endif /* PIPEWIRE_QUERY_H */
+#endif /* PIPEWIRE_PATH_H */

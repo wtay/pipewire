@@ -34,9 +34,10 @@
 #include <pipewire/pipewire.h>
 
 #include "ot.h"
-#include "json.h"
+#include "json-dump.h"
+#include "json-parse.h"
 #include "tree.h"
-#include "query.h"
+#include "path.h"
 
 #define NAME "dump"
 
@@ -113,6 +114,37 @@ static const struct pw_tree_events tree_events = {
 	.removed = tree_removed,
 };
 
+static int filter_port(struct ot_step *step)
+{
+	struct ot_step steps[3];
+	struct ot_node result, val;
+	int res = 0;
+
+	steps[0] = OT_INIT_MATCH_KEY("type");
+
+	ot_path_begin(&step->current, steps, 1, &result);
+	if (ot_node_iterate(&result, &val)) {
+		if (val.type == OT_STRING &&
+		    strncmp(val.v.s.val, "PipeWire:Interface:Port", val.v.s.len) == 0)
+			res = 1;
+	}
+	ot_path_end(&result);
+	if (!res)
+		return res;
+
+	res = 0;
+	steps[0] = OT_INIT_MATCH_KEY("properties");
+	steps[1] = OT_INIT_MATCH_KEY("node.id");
+	ot_path_begin(&step->current, steps, 2, &result);
+	if (ot_node_iterate(&result, &val)) {
+		if (val.type == OT_INT && val.v.i == 74)
+			res = 1;
+	}
+	ot_path_end(&result);
+
+	return res;
+}
+
 int main(int argc, char *argv[])
 {
 	struct data data = { 0 };
@@ -155,14 +187,36 @@ int main(int argc, char *argv[])
 
 	pw_tree_get_root(data.tree, &root);
 
-	steps[0] = OT_INIT_MATCH_SLICE(0,9,1);
+	steps[0] = OT_INIT_MATCH_SLICE(0,-1,1);
+	steps[0].filter = filter_port;
 	steps[1] = OT_INIT_MATCH_KEY("info");
 	steps[2] = OT_INIT_MATCH_ALL();
 	steps[3] = OT_INIT_MATCH_KEY("object.id");
 
-	ot_path_begin(&root, steps, 4, &result);
-	ot_json_dump(&result, 2);
+	ot_path_begin(&root, steps, 1, &result);
+	ot_json_dump(stdout, &result, 2);
 	ot_path_end(&result);
+
+	printf("\n");
+
+	const char *json =
+		"{"
+		"  \"id\": 45,"
+		"  \"name\": \"foo.bar\","
+		"  \"info\": {"
+		"     \"key\": \"foo.bar\","
+		"     \"object.id\": 45,"
+		"     \"object.f\": 0.67,"
+		"     \"object.bt\": true,"
+		"     \"object.bf\": false,"
+		"     \"object.n\": null,"
+		"     \"object.a\": [ \"1\", 2, null, true, false, { uu: 9999999999999999999 } ],"
+		"  }"
+		"}";
+
+	json_parse_begin(json, strlen(json), &result);
+	ot_json_dump(stdout, &result, 2);
+	json_parse_end(&result);
 
 	pw_context_destroy(data.context);
 	pw_main_loop_destroy(data.loop);
