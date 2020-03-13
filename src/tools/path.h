@@ -61,6 +61,7 @@ struct ot_step {
 	union ot_match match;
 	struct ot_step *parent;
 	struct ot_node *node;
+	struct ot_key key;
 	struct ot_node current;
 	int (*filter) (struct ot_step *path);
 	void *data;

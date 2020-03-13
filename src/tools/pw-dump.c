@@ -118,12 +118,13 @@ static int filter_port(struct ot_step *step)
 {
 	struct ot_step steps[3];
 	struct ot_node result, val;
+	struct ot_key key = { 0, };
 	int res = 0;
 
 	steps[0] = OT_INIT_MATCH_KEY("type");
-
 	ot_path_begin(&step->current, steps, 1, &result);
-	if (ot_node_iterate(&result, &val)) {
+
+	if (ot_node_iterate(&result, &key, &val)) {
 		if (val.type == OT_STRING &&
 		    strncmp(val.v.s.val, "PipeWire:Interface:Port", val.v.s.len) == 0)
 			res = 1;
@@ -136,8 +137,9 @@ static int filter_port(struct ot_step *step)
 	steps[0] = OT_INIT_MATCH_KEY("properties");
 	steps[1] = OT_INIT_MATCH_KEY("node.id");
 	ot_path_begin(&step->current, steps, 2, &result);
-	if (ot_node_iterate(&result, &val)) {
-		if (val.type == OT_INT && val.v.i == 74)
+
+	if (ot_node_iterate(&result, &key, &val)) {
+		if (val.type == OT_INT && val.v.i == 40)
 			res = 1;
 	}
 	ot_path_end(&result);
@@ -193,7 +195,7 @@ int main(int argc, char *argv[])
 	steps[2] = OT_INIT_MATCH_ALL();
 	steps[3] = OT_INIT_MATCH_KEY("object.id");
 
-	ot_path_begin(&root, steps, 1, &result);
+	ot_path_begin(&root, steps, 4, &result);
 	ot_json_dump(stdout, &result, 2);
 	ot_path_end(&result);
 

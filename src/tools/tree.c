@@ -54,7 +54,7 @@ struct object_info {
 	uint32_t version;
 	const void *events;
 	void (*destroy) (void *object);
-	void (*enter) (void *object, const char *k, struct ot_node *node);
+	void (*enter) (void *object, int32_t x, const char *k, struct ot_node *node);
 	void (*params) (void *object, uint32_t id);
 };
 
@@ -199,30 +199,30 @@ static int global_params(struct global *gl, uint32_t id)
 	return 0;
 }
 
-#define ot_set_null(n,k)	(*(n) = OT_INIT_NULL(k))
-#define ot_set_bool(n,k,v)	(*(n) = OT_INIT_BOOL(k,v))
-#define ot_set_int(n,k,v)	(*(n) = OT_INIT_INT(k,v))
-#define ot_set_long(n,k,v)	(*(n) = OT_INIT_LONG(k,v))
-#define ot_set_float(n,k,v)	(*(n) = OT_INIT_FLOAT(k,v))
-#define ot_set_double(n,k,v)	(*(n) = OT_INIT_DOUBLE(k,v))
-#define ot_set_string(n,k,v)	(*(n) = OT_INIT_STRING(k,v))
-#define ot_set_array(n,k,i)	(*(n) = OT_INIT_ARRAY(k,i))
-#define ot_set_object(n,k,i)	(*(n) = OT_INIT_OBJECT(k,i))
+#define ot_set_null(n,x,k)	(*(n) = OT_INIT_NULL(x,k))
+#define ot_set_bool(n,x,k,v)	(*(n) = OT_INIT_BOOL(x,k,v))
+#define ot_set_int(n,x,k,v)	(*(n) = OT_INIT_INT(x,k,v))
+#define ot_set_long(n,x,k,v)	(*(n) = OT_INIT_LONG(x,k,v))
+#define ot_set_float(n,x,k,v)	(*(n) = OT_INIT_FLOAT(x,k,v))
+#define ot_set_double(n,x,k,v)	(*(n) = OT_INIT_DOUBLE(x,k,v))
+#define ot_set_string(n,x,k,v)	(*(n) = OT_INIT_STRING(x,k,v))
+#define ot_set_array(n,x,k,i)	(*(n) = OT_INIT_ARRAY(x,k,i))
+#define ot_set_object(n,x,k,i)	(*(n) = OT_INIT_OBJECT(x,k,i))
 
-static void ot_set_global_info(struct ot_node *node, const char *k, struct global *gl)
+static void ot_set_global_info(struct ot_node *node, int32_t x, const char *k, struct global *gl)
 {
 	if (gl->object_info == NULL ||
 	    gl->object_info->enter == NULL) {
-		ot_set_null(node, k);
+		ot_set_null(node, x, k);
 		return;
 	}
 	if (gl->info == NULL)
 		global_bind(gl);
 	if (gl->info == NULL) {
-		ot_set_null(node, k);
+		ot_set_null(node, x, k);
 		return;
 	}
-	gl->object_info->enter(gl, k, node);
+	gl->object_info->enter(gl, x, k, node);
 	node->flags = NODE_FLAG_EXPENSIVE;
 }
 
@@ -234,30 +234,30 @@ struct mask_table {
 	const char *value;
 };
 
-static int ot_mask_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_mask_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	const struct mask_table *tab = node->extra[0].cp;
 	uint32_t n_tab = node->extra[1].i;
 	uint32_t i;
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += n_tab;
 
 	for (i = index; i >= 0 && i < n_tab; i++) {
 		if (!(tab[i].mask & node->extra[2].l))
 			continue;
 
-		ot_set_string(sub, NULL, tab[i].value);
+		ot_set_string(sub, x, NULL, tab[i].value);
 		return 1;
 	}
 	return 0;
 }
 
-static inline void ot_set_mask(struct ot_node *node, const char *k, int64_t mask,
+static inline void ot_set_mask(struct ot_node *node, int32_t x, const char *k, int64_t mask,
 		const struct mask_table *table, uint32_t n_table)
 {
-	ot_set_array(node, k, ot_mask_iterate);
+	ot_set_array(node, x, k, ot_mask_iterate);
 	node->flags = NODE_FLAG_FLAT;
 	node->extra[0].cp = table;
 	node->extra[1].i = n_table;
@@ -267,80 +267,85 @@ static inline void ot_set_mask(struct ot_node *node, const char *k, int64_t mask
 /**
  * Props
  */
-static int ot_props_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_props_iterate(struct ot_node *node, struct ot_key *k, struct ot_node *sub)
 {
 	const struct spa_dict *props = node->extra[0].p;
 	const char *key, *val;
 	char *end;
-	int32_t index;
+	int32_t index, x;
 	long long ll;
 	double d;
 
-	if ((index = node->index) < 0)
-		index += props->n_items;
+	if ((key = k->k.val)) {
+		if ((val = spa_dict_lookup(props, key)) == NULL)
+			return 0;
+		x = 0;
+	} else {
+		if ((x = index = k->index) < 0)
+			index += props->n_items;
+		if (index < 0 || index >= (int32_t)props->n_items)
+			return 0;
 
-	if (index < 0 || index >= (int32_t)props->n_items)
-		return 0;
-
-	key = props->items[index].key;
-	val = props->items[index].value;
+		key = props->items[index].key;
+		val = props->items[index].value;
+	}
 
 	if (val == NULL) {
-		ot_set_null(sub, key);
+		ot_set_null(sub, x, key);
 	} else if (strcmp(val, "true") == 0) {
-		ot_set_bool(sub, key, true);
+		ot_set_bool(sub, x, key, true);
 	} else if (strcmp(val, "false") == 0) {
-		ot_set_bool(sub, key, false);
+		ot_set_bool(sub, x, key, false);
 	} else {
 		errno = 0;
 		ll = strtoll(val, &end, 10);
 		if (*end == '\0' && errno == 0) {
 	                if (ll < INT32_MIN || ll > INT32_MAX)
-				ot_set_long(sub, key, ll);
+				ot_set_long(sub, x, key, ll);
 			else
-				ot_set_int(sub, key, ll);
+				ot_set_int(sub, x, key, ll);
 		} else {
 			errno = 0;
 			d = strtod(val, &end);
 			if (*end == '\0' && errno == 0)
-				ot_set_double(sub, key, d);
+				ot_set_double(sub, x, key, d);
 			else
-				ot_set_string(sub, key, val);
+				ot_set_string(sub, x, key, val);
 		}
 	}
 	return 1;
 }
 
-static inline void ot_set_props(struct ot_node *node, const char *k, struct spa_dict *props)
+static inline void ot_set_props(struct ot_node *node, int32_t x, const char *k, struct spa_dict *props)
 {
 	if (props) {
-		ot_set_object(node, k, ot_props_iterate);
+		ot_set_object(node, x, k, ot_props_iterate);
 		node->extra[0].p = props;
 	} else
-		ot_set_null(node, k);
+		ot_set_null(node, x, k);
 }
 
 /**
  * POD
  */
 static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *info,
-		const char *k, uint32_t type, void *body, uint32_t size);
+		int32_t x, const char *k, uint32_t type, void *body, uint32_t size);
 
 /* pod rectangle */
-static int ot_pod_rectangle_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_pod_rectangle_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	const struct spa_rectangle *r = node->extra[0].p;
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 2;
 
 	switch (index) {
 	case 0:
-		ot_set_int(sub, "width", r->width);
+		ot_set_int(sub, x, "width", r->width);
 		break;
 	case 1:
-		ot_set_int(sub, "height", r->height);
+		ot_set_int(sub, x, "height", r->height);
 		break;
 	default:
 		return 0;
@@ -348,29 +353,29 @@ static int ot_pod_rectangle_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static inline void ot_set_pod_rectangle(struct ot_node *node, const char *k,
+static inline void ot_set_pod_rectangle(struct ot_node *node, int32_t x, const char *k,
 		uint32_t type, void *body, uint32_t size)
 {
-	ot_set_object(node, k, ot_pod_rectangle_iterate);
+	ot_set_object(node, x, k, ot_pod_rectangle_iterate);
 	node->flags = NODE_FLAG_FLAT;
 	node->extra[0].p = body;
 }
 
 /* pod fraction */
-static int ot_pod_fraction_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_pod_fraction_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	const struct spa_fraction *f = node->extra[0].p;
 	int32_t index;
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += 2;
 
 	switch (index) {
 	case 0:
-		ot_set_int(sub, "num", f->num);
+		ot_set_int(sub, key->index, "num", f->num);
 		break;
 	case 1:
-		ot_set_int(sub, "denom", f->denom);
+		ot_set_int(sub, key->index, "denom", f->denom);
 		break;
 	default:
 		return 0;
@@ -378,16 +383,16 @@ static int ot_pod_fraction_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static inline void ot_set_pod_fraction(struct ot_node *node, const char *k,
+static inline void ot_set_pod_fraction(struct ot_node *node, int32_t x, const char *k,
 		uint32_t type, void *body, uint32_t size)
 {
-	ot_set_object(node, k, ot_pod_fraction_iterate);
+	ot_set_object(node, x, k, ot_pod_fraction_iterate);
 	node->flags = NODE_FLAG_FLAT;
 	node->extra[0].p = body;
 }
 
 /* pod choice */
-static int ot_pod_choice_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_pod_choice_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[5].i;
 	const char *label;
@@ -396,7 +401,7 @@ static int ot_pod_choice_iterate(struct ot_node *node, struct ot_node *sub)
 	static const char *enum_labels[] = { "default", "alt%u" };
 	static const char *flags_labels[] = { "default", "flag%u" };
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += n_items;
 	if (index < 0 || index >= n_items)
 		return 0;
@@ -422,24 +427,24 @@ static int ot_pod_choice_iterate(struct ot_node *node, struct ot_node *sub)
 
 	snprintf(node->buffer, sizeof(node->buffer), label, index);
 
-	return ot_pod_set_value(sub, node->extra[4].cp, node->buffer,
+	return ot_pod_set_value(sub, node->extra[4].cp, key->index, node->buffer,
 			node->extra[2].i,
 			SPA_MEMBER(node->extra[1].p, index * node->extra[3].i, void),
 			node->extra[3].i);
 }
 
 static inline void ot_set_pod_choice(struct ot_node *node, const struct spa_type_info *info,
-	const char *k, uint32_t type, void *body, uint32_t size)
+	int32_t x, const char *k, uint32_t type, void *body, uint32_t size)
 {
 	const struct spa_pod_choice_body *b = body;
 
 	if (b->type == SPA_CHOICE_None) {
-		ot_pod_set_value(node, info, k,
+		ot_pod_set_value(node, info, x, k,
 				b->child.type,
 				SPA_POD_CONTENTS(struct spa_pod, &b->child),
 				b->child.size);
 	} else {
-		ot_set_object(node, k, ot_pod_choice_iterate);
+		ot_set_object(node, x, k, ot_pod_choice_iterate);
 		node->extra[0].i = b->type;
 		node->extra[1].p = SPA_MEMBER(b, sizeof(struct spa_pod_choice_body), void);
 		node->extra[2].i = b->child.type;
@@ -459,7 +464,7 @@ static const struct spa_pod_prop *find_nth_prop(void *body, uint32_t size, uint3
 	return NULL;
 }
 
-static int ot_pod_object_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_pod_object_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[4].i;
 	void *body = (void*)node->extra[1].p;
@@ -467,7 +472,7 @@ static int ot_pod_object_iterate(struct ot_node *node, struct ot_node *sub)
 	const struct spa_type_info *info = node->extra[3].cp, *ii;
 	const struct spa_pod_prop *p;
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += n_items;
 	if (index < 0 || index >= n_items)
 		return 0;
@@ -476,14 +481,14 @@ static int ot_pod_object_iterate(struct ot_node *node, struct ot_node *sub)
 
 	ii = spa_debug_type_find(info, p->key);
 
-	return ot_pod_set_value(sub, ii ? ii->values : NULL,
+	return ot_pod_set_value(sub, ii ? ii->values : NULL, key->index,
 			ii ? spa_debug_type_short_name(ii->name) : "*unknown*",
 			p->value.type,
 			SPA_POD_CONTENTS(struct spa_pod_prop, p),
 			p->value.size);
 }
 
-static inline void ot_set_pod_object(struct ot_node *node, const char *k,
+static inline void ot_set_pod_object(struct ot_node *node, int32_t x, const char *k,
 		uint32_t type, void *body, uint32_t size)
 {
 	struct spa_pod_object_body *b = (struct spa_pod_object_body *)body;
@@ -494,7 +499,7 @@ static inline void ot_set_pod_object(struct ot_node *node, const char *k,
 	ii = ti ? spa_debug_type_find(ti->values, 0) : NULL;
 	ii = ii ? spa_debug_type_find(ii->values, b->id) : NULL;
 
-	ot_set_object(node, k, ot_pod_object_iterate);
+	ot_set_object(node, x, k, ot_pod_object_iterate);
 	node->extra[0].i = type;
 	node->extra[1].p = body;
 	node->extra[2].i = size;
@@ -505,27 +510,27 @@ static inline void ot_set_pod_object(struct ot_node *node, const char *k,
 }
 
 /* pod array */
-static int ot_pod_array_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_pod_array_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[4].i;
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += n_items;
 	if (index < 0 || index >= n_items)
 		return 0;
 
-	return ot_pod_set_value(sub, node->extra[3].cp, NULL,
+	return ot_pod_set_value(sub, node->extra[3].cp, key->index, NULL,
 			node->extra[1].i,
 			SPA_MEMBER(node->extra[0].p, index * node->extra[2].i, void),
 			node->extra[2].i);
 }
 
 static inline void ot_set_pod_array(struct ot_node *node, const struct spa_type_info *info,
-		const char *k, uint32_t type, void *body, uint32_t size)
+		int32_t x, const char *k, uint32_t type, void *body, uint32_t size)
 {
 	const struct spa_pod_array_body *b = body;
 
-	ot_set_array(node, k, ot_pod_array_iterate);
+	ot_set_array(node, x, k, ot_pod_array_iterate);
 	node->flags = b->child.type < SPA_TYPE_Bitmap ? NODE_FLAG_FLAT : 0;
 	node->extra[0].p = SPA_MEMBER(b, sizeof(struct spa_pod_array_body), void);
 	node->extra[1].i = b->child.type;
@@ -536,47 +541,47 @@ static inline void ot_set_pod_array(struct ot_node *node, const struct spa_type_
 
 /* pod */
 static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *info,
-		const char *k, uint32_t type, void *body, uint32_t size)
+		int32_t x, const char *k, uint32_t type, void *body, uint32_t size)
 {
 	switch (type) {
 	case SPA_TYPE_Bool:
-		ot_set_bool(node, k, *(int32_t*)body ? true : false);
+		ot_set_bool(node, x, k, *(int32_t*)body ? true : false);
 		break;
 	case SPA_TYPE_Id:
-		ot_set_string(node, k, spa_debug_type_find_short_name(info, *(int32_t*)body));
+		ot_set_string(node, x, k, spa_debug_type_find_short_name(info, *(int32_t*)body));
 		break;
 	case SPA_TYPE_Int:
-		ot_set_int(node, k, *(int32_t*)body);
+		ot_set_int(node, x, k, *(int32_t*)body);
 		break;
 	case SPA_TYPE_Long:
-		ot_set_long(node, k, *(int64_t*)body);
+		ot_set_long(node, x, k, *(int64_t*)body);
 		break;
 	case SPA_TYPE_Float:
-		ot_set_double(node, k, *(float*)body);
+		ot_set_double(node, x, k, *(float*)body);
 		break;
 	case SPA_TYPE_Double:
-		ot_set_double(node, k, *(double*)body);
+		ot_set_double(node, x, k, *(double*)body);
 		break;
 	case SPA_TYPE_String:
-		ot_set_string(node, k, (char*)body);
+		ot_set_string(node, x, k, (char*)body);
 		break;
 	case SPA_TYPE_Fd:
-		ot_set_int(node, k, *(int*)body);
+		ot_set_int(node, x, k, *(int*)body);
 		break;
 	case SPA_TYPE_Rectangle:
-		ot_set_pod_rectangle(node, k, type, body, size);
+		ot_set_pod_rectangle(node, x, k, type, body, size);
 		break;
 	case SPA_TYPE_Fraction:
-		ot_set_pod_fraction(node, k, type, body, size);
+		ot_set_pod_fraction(node, x, k, type, body, size);
 		break;
 	case SPA_TYPE_Array:
-		ot_set_pod_array(node, info, k, type, body, size);
+		ot_set_pod_array(node, info, x, k, type, body, size);
 		break;
 	case SPA_TYPE_Choice:
-		ot_set_pod_choice(node, info, k, type, body, size);
+		ot_set_pod_choice(node, info, x, k, type, body, size);
 		break;
 	case SPA_TYPE_Object:
-		ot_set_pod_object(node, k, type, body, size);
+		ot_set_pod_object(node, x, k, type, body, size);
 		break;
 	case SPA_TYPE_Pointer:
 	case SPA_TYPE_Bitmap:
@@ -584,19 +589,19 @@ static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *in
 	case SPA_TYPE_Sequence:
 	case SPA_TYPE_Bytes:
 	case SPA_TYPE_None:
-		ot_set_null(node, k);
+		ot_set_null(node, x, k);
 		break;
 	default:
-		ot_set_null(node, k);
+		ot_set_null(node, x, k);
 		return 0;
 	}
 	return 1;
 }
 
-static inline void ot_set_pod(struct ot_node *node, const char *k,
+static inline void ot_set_pod(struct ot_node *node, int32_t x, const char *k,
 		struct spa_pod *pod)
 {
-	ot_pod_set_value(node, SPA_TYPE_ROOT, k,
+	ot_pod_set_value(node, SPA_TYPE_ROOT, x, k,
                         SPA_POD_TYPE(pod),
                         SPA_POD_BODY(pod),
                         SPA_POD_BODY_SIZE(pod));
@@ -624,7 +629,7 @@ static const struct param *find_nth_param(struct spa_list *param_list, uint32_t 
 	return NULL;
 }
 
-static int ot_param_list_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_param_list_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct spa_list *param_list = &gl->param_list;
@@ -642,7 +647,7 @@ static int ot_param_list_iterate(struct ot_node *node, struct ot_node *sub)
 
 	n_items = node->extra[3].i;
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += n_items;
 	if (index < 0 || index >= n_items)
 		return 0;
@@ -650,29 +655,28 @@ static int ot_param_list_iterate(struct ot_node *node, struct ot_node *sub)
 	if ((p = find_nth_param(param_list, id, index)) == NULL)
 		return 0;
 
-	ot_set_pod(sub, NULL, p->param);
+	ot_set_pod(sub, key->index, NULL, p->param);
 	return 1;
 }
 
 /**
  * ParamInfo
  */
-static int ot_param_info_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_param_info_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct spa_param_info *params = node->extra[0].p;
 	struct global *gl = node->extra[2].p;
 	int32_t index, n_params = node->extra[1].i;
 	uint32_t id;
 
-	index = node->index;
-	if (index < 0)
+	if ((index = key->index) < 0)
 		index += n_params;
 	if (index < 0 || index >= n_params)
 		return 0;
 
 	id = params[index].id;
 
-	ot_set_array(sub, spa_debug_type_find_short_name(spa_type_param, id),
+	ot_set_array(sub, key->index, spa_debug_type_find_short_name(spa_type_param, id),
 			ot_param_list_iterate);
 
 	sub->extra[0].p = gl;
@@ -683,11 +687,11 @@ static int ot_param_info_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static inline void ot_set_param_info(struct ot_node *node, const char *k,
+static inline void ot_set_param_info(struct ot_node *node, int32_t x, const char *k,
 		struct spa_param_info *params, uint32_t n_params,
 		struct global *gl)
 {
-	ot_set_object(node, k, ot_param_info_iterate);
+	ot_set_object(node, x, k, ot_param_info_iterate);
 	node->extra[0].p = params;
 	node->extra[1].i = n_params;
 	node->extra[2].p = gl;
@@ -716,42 +720,42 @@ static void core_destroy(void *object)
 		pw_core_info_free(gl->info);
 }
 
-static int ot_core_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_core_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_core_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
 		{ PW_CORE_CHANGE_MASK_PROPS, "props" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 8;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, "cookie", i->cookie);
+		ot_set_int(sub, x, "cookie", i->cookie);
 		break;
 	case 2:
-		ot_set_string(sub, "user-name", i->user_name);
+		ot_set_string(sub, x, "user-name", i->user_name);
 		break;
 	case 3:
-		ot_set_string(sub, "host-name", i->host_name);
+		ot_set_string(sub, x, "host-name", i->host_name);
 		break;
 	case 4:
-		ot_set_string(sub, "version", i->version);
+		ot_set_string(sub, x, "version", i->version);
 		break;
 	case 5:
-		ot_set_string(sub, "name", i->name);
+		ot_set_string(sub, x, "name", i->name);
 		break;
 	case 6:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 7:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	default:
 		return 0;
@@ -759,10 +763,10 @@ static int ot_core_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_core_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_core_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_core_iterate);
+	ot_set_object(node, x, k, ot_core_iterate);
 	node->extra[0].p = gl->info;
 }
 
@@ -798,36 +802,36 @@ static void module_destroy(void *object)
 		pw_module_info_free(gl->info);
 }
 
-static int ot_module_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_module_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_module_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
 		{ PW_MODULE_CHANGE_MASK_PROPS, "props" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 6;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_string(sub, "name", i->name);
+		ot_set_string(sub, x, "name", i->name);
 		break;
 	case 2:
-		ot_set_string(sub, "filename", i->filename);
+		ot_set_string(sub, x, "filename", i->filename);
 		break;
 	case 3:
-		ot_set_string(sub, "args", i->args);
+		ot_set_string(sub, x, "args", i->args);
 		break;
 	case 4:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 5:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	default:
 		return 0;
@@ -835,10 +839,10 @@ static int ot_module_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_module_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_module_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_module_iterate);
+	ot_set_object(node, x, k, ot_module_iterate);
 	node->extra[0].p = gl->info;
 }
 
@@ -874,36 +878,36 @@ static void factory_destroy(void *object)
 		pw_factory_info_free(gl->info);
 }
 
-static int ot_factory_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_factory_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_factory_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
 		{ PW_FACTORY_CHANGE_MASK_PROPS, "props" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 6;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_string(sub, "name", i->name);
+		ot_set_string(sub, x, "name", i->name);
 		break;
 	case 2:
-		ot_set_string(sub, "type", i->type);
+		ot_set_string(sub, x, "type", i->type);
 		break;
 	case 3:
-		ot_set_int(sub, "version", i->version);
+		ot_set_int(sub, x, "version", i->version);
 		break;
 	case 4:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 5:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	default:
 		return 0;
@@ -911,10 +915,10 @@ static int ot_factory_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_factory_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_factory_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_factory_iterate);
+	ot_set_object(node, x, k, ot_factory_iterate);
 	node->extra[0].p = gl->info;
 }
 
@@ -950,27 +954,27 @@ static void client_destroy(void *object)
 		pw_client_info_free(gl->info);
 }
 
-static int ot_client_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_client_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_client_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
 		{ PW_CLIENT_CHANGE_MASK_PROPS, "props" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 3;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 2:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	default:
 		return 0;
@@ -978,10 +982,10 @@ static int ot_client_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_client_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_client_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_client_iterate);
+	ot_set_object(node, x, k, ot_client_iterate);
 	node->extra[0].p = gl->info;
 }
 
@@ -1044,7 +1048,7 @@ static void device_destroy(void *object)
 		pw_device_info_free(gl->info);
 }
 
-static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_device_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_device_info *i = gl->info;
@@ -1052,24 +1056,24 @@ static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
 		{ PW_DEVICE_CHANGE_MASK_PROPS, "props" },
 		{ PW_DEVICE_CHANGE_MASK_PARAMS, "params" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 4;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 2:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	case 3:
-		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
+		ot_set_param_info(sub, x, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -1077,10 +1081,10 @@ static int ot_device_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_device_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_device_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_device_iterate);
+	ot_set_object(node, x, k, ot_device_iterate);
 	node->extra[0].p = gl;
 }
 
@@ -1144,7 +1148,7 @@ static void node_destroy(void *object)
 		pw_node_info_free(gl->info);
 }
 
-static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_node_info_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_node_info *i = gl->info;
@@ -1155,42 +1159,42 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
 		{ PW_NODE_CHANGE_MASK_PROPS, "props" },
 		{ PW_NODE_CHANGE_MASK_PARAMS, "params" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 10;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, "max-input-ports", i->max_input_ports);
+		ot_set_int(sub, x, "max-input-ports", i->max_input_ports);
 		break;
 	case 2:
-		ot_set_int(sub, "max-output-ports", i->max_output_ports);
+		ot_set_int(sub, x, "max-output-ports", i->max_output_ports);
 		break;
 	case 3:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 4:
-		ot_set_int(sub, "n-input-ports", i->n_input_ports);
+		ot_set_int(sub, x, "n-input-ports", i->n_input_ports);
 		break;
 	case 5:
-		ot_set_int(sub, "n-output-ports", i->n_output_ports);
+		ot_set_int(sub, x, "n-output-ports", i->n_output_ports);
 		break;
 	case 6:
-		ot_set_string(sub, "state", pw_node_state_as_string(i->state));
+		ot_set_string(sub, x, "state", pw_node_state_as_string(i->state));
 		break;
 	case 7:
-		ot_set_string(sub, "error", i->error);
+		ot_set_string(sub, x, "error", i->error);
 		break;
 	case 8:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	case 9:
-		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
+		ot_set_param_info(sub, x, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -1198,10 +1202,10 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_node_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_node_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_node_info_iterate);
+	ot_set_object(node, x, k, ot_node_info_iterate);
 	node->extra[0].p = gl;
 }
 
@@ -1266,7 +1270,7 @@ static void port_destroy(void *object)
 }
 
 
-static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_port_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_port_info *i = gl->info;
@@ -1274,27 +1278,27 @@ static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
 		{ PW_PORT_CHANGE_MASK_PROPS, "props" },
 		{ PW_PORT_CHANGE_MASK_PARAMS, "params" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 5;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_string(sub, "direction", pw_direction_as_string(i->direction));
+		ot_set_string(sub, x, "direction", pw_direction_as_string(i->direction));
 		break;
 	case 2:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 3:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	case 4:
-		ot_set_param_info(sub, "params", i->params, i->n_params, gl);
+		ot_set_param_info(sub, x, "params", i->params, i->n_params, gl);
 		break;
 	default:
 		return 0;
@@ -1302,10 +1306,10 @@ static int ot_port_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_port_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_port_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	struct global *gl = data;
-	ot_set_object(node, k, ot_port_iterate);
+	ot_set_object(node, x, k, ot_port_iterate);
 	node->extra[0].p = gl;
 }
 
@@ -1341,7 +1345,7 @@ static void link_destroy(void *object)
 		pw_link_info_free(gl->info);
 }
 
-static int ot_link_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_link_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_link_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -1349,42 +1353,42 @@ static int ot_link_iterate(struct ot_node *node, struct ot_node *sub)
 		{ PW_LINK_CHANGE_MASK_FORMAT, "format" },
 		{ PW_LINK_CHANGE_MASK_PROPS, "props" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 10;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", i->id);
+		ot_set_int(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, "output-node-id", i->output_node_id);
+		ot_set_int(sub, x, "output-node-id", i->output_node_id);
 		break;
 	case 2:
-		ot_set_int(sub, "output-port-id", i->output_port_id);
+		ot_set_int(sub, x, "output-port-id", i->output_port_id);
 		break;
 	case 3:
-		ot_set_int(sub, "input-node-id", i->input_node_id);
+		ot_set_int(sub, x, "input-node-id", i->input_node_id);
 		break;
 	case 4:
-		ot_set_int(sub, "input-port-id", i->input_port_id);
+		ot_set_int(sub, x, "input-port-id", i->input_port_id);
 		break;
 	case 5:
-		ot_set_mask(sub, "change-mask",
+		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 6:
-		ot_set_string(sub, "state", pw_link_state_as_string(i->state));
+		ot_set_string(sub, x, "state", pw_link_state_as_string(i->state));
 		break;
 	case 7:
-		ot_set_string(sub, "error", i->error);
+		ot_set_string(sub, x, "error", i->error);
 		break;
 	case 8:
-		ot_set_pod(sub, "format", i->format);
+		ot_set_pod(sub, x, "format", i->format);
 		break;
 	case 9:
-		ot_set_props(sub, "props", i->props);
+		ot_set_props(sub, x, "props", i->props);
 		break;
 	default:
 		return 0;
@@ -1392,10 +1396,10 @@ static int ot_link_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_link_info_enter(void *data, const char *k, struct ot_node *node)
+static void ot_link_info_enter(void *data, int32_t x, const char *k, struct ot_node *node)
 {
 	const struct global *gl = data;
-	ot_set_object(node, k, ot_link_iterate);
+	ot_set_object(node, x, k, ot_link_iterate);
 	node->extra[0].p = gl->info;
 }
 
@@ -1415,7 +1419,7 @@ static void on_core_done(void *data, uint32_t id, int seq)
 }
 
 
-static int ot_global_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_global_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -1423,30 +1427,30 @@ static int ot_global_iterate(struct ot_node *node, struct ot_node *sub)
 		{ PW_PERM_W, "w" },
 		{ PW_PERM_X, "x" },
 	};
-	int32_t index;
+	int32_t index, x;
 
-	if ((index = node->index) < 0)
+	if ((x = index = key->index) < 0)
 		index += 6;
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, "id", gl->id);
+		ot_set_int(sub, x, "id", gl->id);
 		break;
 	case 1:
-		ot_set_string(sub, "type", gl->type);
+		ot_set_string(sub, x, "type", gl->type);
 		break;
 	case 2:
-		ot_set_int(sub, "version", gl->version);
+		ot_set_int(sub, x, "version", gl->version);
 		break;
 	case 3:
-		ot_set_mask(sub, "permissions", gl->permissions,
+		ot_set_mask(sub, x, "permissions", gl->permissions,
 				change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 4:
-		ot_set_props(sub, "properties", gl->props ? &gl->props->dict : NULL);
+		ot_set_props(sub, x, "properties", gl->props ? &gl->props->dict : NULL);
 		break;
 	case 5:
-		ot_set_global_info(sub, "info", gl);
+		ot_set_global_info(sub, x, "info", gl);
 		break;
 	default:
 		return 0;
@@ -1454,9 +1458,9 @@ static int ot_global_iterate(struct ot_node *node, struct ot_node *sub)
 	return 1;
 }
 
-static void ot_global_enter(struct global *gl, const char *k, struct ot_node *node)
+static void ot_global_enter(struct global *gl, int32_t x, const char *k, struct ot_node *node)
 {
-	ot_set_object(node, k, ot_global_iterate);
+	ot_set_object(node, x, k, ot_global_iterate);
 	node->extra[0].p = gl;
 }
 
@@ -1469,13 +1473,13 @@ static struct global *global_get_nth(struct spa_list *list, int nth)
 	return NULL;
 }
 
-static int ot_root_iterate(struct ot_node *node, struct ot_node *sub)
+static int ot_root_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
 {
 	struct global *global;
 	struct spa_list *global_list = node->extra[0].p;
 	int32_t index, n_items = node->extra[1].i;
 
-	if ((index = node->index) < 0)
+	if ((index = key->index) < 0)
 		index += n_items;
 	if (index < 0 || index >= n_items)
 		return 0;
@@ -1483,13 +1487,13 @@ static int ot_root_iterate(struct ot_node *node, struct ot_node *sub)
 	if ((global = global_get_nth(global_list, index)) == NULL)
 		return 0;
 
-	ot_global_enter(global, NULL, sub);
+	ot_global_enter(global, key->index, NULL, sub);
 	return 1;
 }
 
-static inline void ot_root_enter(struct data *data, const char *k, struct ot_node *node)
+static inline void ot_root_enter(struct data *data, int32_t x, const char *k, struct ot_node *node)
 {
-	ot_set_array(node, k, ot_root_iterate);
+	ot_set_array(node, x, k, ot_root_iterate);
 	node->extra[0].p = &data->global_list;
 	node->extra[1].i = data->n_globals;
 }
@@ -1605,7 +1609,7 @@ void pw_tree_add_listener(struct pw_tree *tree,
 int pw_tree_get_root(struct pw_tree *tree, struct ot_node *node)
 {
 	spa_zero(*node);
-	ot_root_enter(&tree->data, NULL, node);
+	ot_root_enter(&tree->data, 0, NULL, node);
 	return 0;
 }
 

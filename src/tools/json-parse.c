@@ -21,7 +21,7 @@
 #define NODE_PARENT_CUR(n)	NODE_CUR((struct ot_node*)NODE_PARENT(n))
 #define NODE_DEPTH(n)		((n)->extra[4].i)
 
-static int node_iterate(struct ot_node *node, struct ot_node *sub);
+static int node_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub);
 
 static void parse_begin(char *data, char *end, struct ot_node *parent, struct ot_node *sub)
 {
@@ -32,14 +32,14 @@ static void parse_begin(char *data, char *end, struct ot_node *parent, struct ot
 	sub->iterate = node_iterate;
 }
 
-static void bare_type(const char *start, int len, struct ot_string *key, struct ot_node *node)
+static void bare_type(const char *start, int len, int32_t x, struct ot_string *key, struct ot_node *node)
 {
 	if (strncmp(start, "null", len) == 0)
-		*node = OT_INIT_NULLN(key->val, key->len);
+		*node = OT_INIT_NULLN(x, key->val, key->len);
 	else if (strncmp(start, "true", len) == 0)
-		*node = OT_INIT_BOOLN(key->val, key->len, true);
+		*node = OT_INIT_BOOLN(x, key->val, key->len, true);
 	else if (strncmp(start, "false", len) == 0)
-		*node = OT_INIT_BOOLN(key->val, key->len, false);
+		*node = OT_INIT_BOOLN(x, key->val, key->len, false);
 	else  {
 		char tmp[len+1], *end;
 		long long ll;
@@ -52,20 +52,20 @@ static void bare_type(const char *start, int len, struct ot_string *key, struct 
 		ll = strtoll(tmp, &end, 10);
 		if (*end == '\0' && errno == 0) {
 			if (ll < INT32_MIN || ll > INT32_MAX)
-				*node = OT_INIT_LONGN(key->val, key->len, ll);
+				*node = OT_INIT_LONGN(x, key->val, key->len, ll);
 			else
-				*node = OT_INIT_INTN(key->val, key->len, ll);
+				*node = OT_INIT_INTN(x, key->val, key->len, ll);
 		} else {
 			errno = 0;
 			d = strtod(tmp, &end);
 			if (*end == '\0' && errno == 0)
-				*node = OT_INIT_DOUBLEN(key->val, key->len, d);
+				*node = OT_INIT_DOUBLEN(x, key->val, key->len, d);
 			else
-				*node = OT_INIT_STRINGN(key->val, key->len, start, len);
+				*node = OT_INIT_STRINGN(x, key->val, key->len, start, len);
 		}
 	}
 }
-static int node_iterate(struct ot_node *node, struct ot_node *sub)
+static int node_iterate(struct ot_node *node, struct ot_key *k, struct ot_node *sub)
 {
 	int utf8_remain = 0, len;
 	struct ot_string key = { 0, };
@@ -94,9 +94,9 @@ static int node_iterate(struct ot_node *node, struct ot_node *sub)
 					continue;
 				NODE_CUR_INC(node, 1);
 				if (cur == '[')
-					*sub = OT_INIT_ARRAYN(key.val, key.len, node_iterate);
+					*sub = OT_INIT_ARRAYN(0, key.val, key.len, node_iterate);
 				else
-					*sub = OT_INIT_OBJECTN(key.val, key.len, node_iterate);
+					*sub = OT_INIT_OBJECTN(0, key.val, key.len, node_iterate);
 				key.val = NULL;
 				parse_begin(NODE_CUR(node), NODE_END(node), node, sub);
 				return 1;
@@ -127,7 +127,7 @@ static int node_iterate(struct ot_node *node, struct ot_node *sub)
 					key.len = len;
 					continue;
 				}
-				bare_type(start, len, &key, sub);
+				bare_type(start, len, 0, &key, sub);
 				key.val = NULL;
 				parse_begin(NODE_CUR(node), NODE_END(node), node, sub);
 				return 1;
@@ -152,7 +152,7 @@ static int node_iterate(struct ot_node *node, struct ot_node *sub)
 					key.len = len;
 					continue;
 				}
-				*sub = OT_INIT_STRINGN(key.val, key.len, start, len);
+				*sub = OT_INIT_STRINGN(0, key.val, key.len, start, len);
 				key.val = NULL;
 				parse_begin(NODE_CUR(node), NODE_END(node), node, sub);
 				return 1;
@@ -195,8 +195,9 @@ static int node_iterate(struct ot_node *node, struct ot_node *sub)
 int json_parse_begin(const char *data, int32_t size, struct ot_node *result)
 {
 	struct ot_node root;
+	struct ot_key key = { 0, };
 	parse_begin((char*)data, (char*)(data + size), NULL, &root);
-	return ot_node_iterate(&root, result);
+	return ot_node_iterate(&root, &key, result);
 }
 
 void json_parse_end(struct ot_node *result)

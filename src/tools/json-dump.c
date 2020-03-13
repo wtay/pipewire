@@ -80,6 +80,7 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 		const char open_sep = node->type == OT_ARRAY ? '[' : '{';
 		const char close_sep = node->type == OT_ARRAY ? ']' : '}';
 		struct ot_node sub = { 0, };
+		struct ot_key key = { 0, };
 
 		IND("%c", l0, open_sep);
 
@@ -91,11 +92,11 @@ static inline int ot_json_dump2(struct ot_node *node, struct ot_json_ctx *ctx)
 			l0 = ctx->l0;
 			ctx->l0 = (node->flags & NODE_FLAG_FLAT) ? 0 : ctx->l1;
 
-			node->index = 0;
-			while (ot_node_iterate(node, &sub)) {
+			key.index = 0;
+			while (ot_node_iterate(node, &key, &sub)) {
 				OUT("%s %s", i++ > 0 ? "," : "", ctx->l0 ? "\n" : "");
 				ot_json_dump2(&sub, ctx);
-				node->index++;
+				key.index++;
 			}
 			ctx->l1--;
 			ctx->l0 = l0;
