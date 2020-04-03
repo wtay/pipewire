@@ -22,25 +22,21 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef PIPEWIRE_JSON_DUMP_H
-#define PIPEWIRE_JSON_DUMP_H
+#ifndef PIPEWIRE_JSON_PATH_H
+#define PIPEWIRE_JSON_PATH_H
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-#include <unistd.h>
-
-#include "ot.h"
 #include "path.h"
 
-int ot_json_dump(FILE *out, struct ot_node *node, int cutoff);
+int json_path_parse(const char **path, struct ot_step *step, int max_step);
 
-void ot_json_dump_steps(FILE *out, struct ot_step *step, int n_step);
-void ot_json_dump_path(FILE *out, struct ot_node *val);
+void json_path_cleanup(struct ot_step *step, int n_step);
 
 #ifdef __cplusplus
-extern "C" }
+}
 #endif
 
-#endif /* PIPEWIRE_JSON_DUMP_H */
+#endif /* PIPEWIRE_JSON_PATH_H */

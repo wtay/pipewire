@@ -21,7 +21,7 @@
 #define NODE_PARENT_CUR(n)	NODE_CUR((struct ot_node*)NODE_PARENT(n))
 #define NODE_DEPTH(n)		((n)->extra[4].i)
 
-static int node_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub);
+static int node_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub);
 
 static void parse_begin(char *data, char *end, struct ot_node *parent, struct ot_node *sub)
 {
@@ -51,21 +51,18 @@ static void bare_type(const char *start, int len, int32_t x, struct ot_string *k
 		errno = 0;
 		ll = strtoll(tmp, &end, 10);
 		if (*end == '\0' && errno == 0) {
-			if (ll < INT32_MIN || ll > INT32_MAX)
-				*node = OT_INIT_LONGN(x, key->val, key->len, ll);
-			else
-				*node = OT_INIT_INTN(x, key->val, key->len, ll);
+			*node = OT_INIT_NUMBERNI(x, key->val, key->len, ll);
 		} else {
 			errno = 0;
 			d = strtod(tmp, &end);
 			if (*end == '\0' && errno == 0)
-				*node = OT_INIT_DOUBLEN(x, key->val, key->len, d);
+				*node = OT_INIT_NUMBERN(x, key->val, key->len, d);
 			else
 				*node = OT_INIT_STRINGN(x, key->val, key->len, start, len);
 		}
 	}
 }
-static int node_iterate(struct ot_node *node, struct ot_key *k, struct ot_node *sub)
+static int node_iterate(struct ot_node *node, const struct ot_key *k, struct ot_node *sub)
 {
 	int utf8_remain = 0, len;
 	struct ot_string key = { 0, };

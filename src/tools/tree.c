@@ -201,10 +201,8 @@ static int global_params(struct global *gl, uint32_t id)
 
 #define ot_set_null(n,x,k)	(*(n) = OT_INIT_NULL(x,k))
 #define ot_set_bool(n,x,k,v)	(*(n) = OT_INIT_BOOL(x,k,v))
-#define ot_set_int(n,x,k,v)	(*(n) = OT_INIT_INT(x,k,v))
-#define ot_set_long(n,x,k,v)	(*(n) = OT_INIT_LONG(x,k,v))
-#define ot_set_float(n,x,k,v)	(*(n) = OT_INIT_FLOAT(x,k,v))
-#define ot_set_double(n,x,k,v)	(*(n) = OT_INIT_DOUBLE(x,k,v))
+#define ot_set_numberi(n,x,k,v)	(*(n) = OT_INIT_NUMBERI(x,k,v))
+#define ot_set_number(n,x,k,v)	(*(n) = OT_INIT_NUMBER(x,k,v))
 #define ot_set_string(n,x,k,v)	(*(n) = OT_INIT_STRING(x,k,v))
 #define ot_set_array(n,x,k,i)	(*(n) = OT_INIT_ARRAY(x,k,i))
 #define ot_set_object(n,x,k,i)	(*(n) = OT_INIT_OBJECT(x,k,i))
@@ -234,7 +232,7 @@ struct mask_table {
 	const char *value;
 };
 
-static int ot_mask_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_mask_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	const struct mask_table *tab = node->extra[0].cp;
 	uint32_t n_tab = node->extra[1].i;
@@ -244,11 +242,12 @@ static int ot_mask_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 	if ((x = index = key->index) < 0)
 		index += n_tab;
 
-	for (i = index; i >= 0 && i < n_tab; i++) {
+	for (i = index; i < n_tab; i++) {
 		if (!(tab[i].mask & node->extra[2].l))
 			continue;
 
 		ot_set_string(sub, x, NULL, tab[i].value);
+		sub->parent = node;
 		return 1;
 	}
 	return 0;
@@ -267,7 +266,7 @@ static inline void ot_set_mask(struct ot_node *node, int32_t x, const char *k, i
 /**
  * Props
  */
-static int ot_props_iterate(struct ot_node *node, struct ot_key *k, struct ot_node *sub)
+static int ot_props_iterate(struct ot_node *node, const struct ot_key *k, struct ot_node *sub)
 {
 	const struct spa_dict *props = node->extra[0].p;
 	const char *key, *val;
@@ -276,7 +275,7 @@ static int ot_props_iterate(struct ot_node *node, struct ot_key *k, struct ot_no
 	long long ll;
 	double d;
 
-	if ((key = k->k.val)) {
+	if ((key = k->k.val) && k->k.len == -1) {
 		if ((val = spa_dict_lookup(props, key)) == NULL)
 			return 0;
 		x = 0;
@@ -300,19 +299,17 @@ static int ot_props_iterate(struct ot_node *node, struct ot_key *k, struct ot_no
 		errno = 0;
 		ll = strtoll(val, &end, 10);
 		if (*end == '\0' && errno == 0) {
-	                if (ll < INT32_MIN || ll > INT32_MAX)
-				ot_set_long(sub, x, key, ll);
-			else
-				ot_set_int(sub, x, key, ll);
+			ot_set_numberi(sub, x, key, ll);
 		} else {
 			errno = 0;
 			d = strtod(val, &end);
 			if (*end == '\0' && errno == 0)
-				ot_set_double(sub, x, key, d);
+				ot_set_number(sub, x, key, d);
 			else
 				ot_set_string(sub, x, key, val);
 		}
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -332,7 +329,7 @@ static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *in
 		int32_t x, const char *k, uint32_t type, void *body, uint32_t size);
 
 /* pod rectangle */
-static int ot_pod_rectangle_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_pod_rectangle_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	const struct spa_rectangle *r = node->extra[0].p;
 	int32_t index, x;
@@ -342,14 +339,15 @@ static int ot_pod_rectangle_iterate(struct ot_node *node, struct ot_key *key, st
 
 	switch (index) {
 	case 0:
-		ot_set_int(sub, x, "width", r->width);
+		ot_set_numberi(sub, x, "width", r->width);
 		break;
 	case 1:
-		ot_set_int(sub, x, "height", r->height);
+		ot_set_numberi(sub, x, "height", r->height);
 		break;
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -362,7 +360,7 @@ static inline void ot_set_pod_rectangle(struct ot_node *node, int32_t x, const c
 }
 
 /* pod fraction */
-static int ot_pod_fraction_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_pod_fraction_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	const struct spa_fraction *f = node->extra[0].p;
 	int32_t index;
@@ -372,14 +370,15 @@ static int ot_pod_fraction_iterate(struct ot_node *node, struct ot_key *key, str
 
 	switch (index) {
 	case 0:
-		ot_set_int(sub, key->index, "num", f->num);
+		ot_set_numberi(sub, key->index, "num", f->num);
 		break;
 	case 1:
-		ot_set_int(sub, key->index, "denom", f->denom);
+		ot_set_numberi(sub, key->index, "denom", f->denom);
 		break;
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -392,7 +391,7 @@ static inline void ot_set_pod_fraction(struct ot_node *node, int32_t x, const ch
 }
 
 /* pod choice */
-static int ot_pod_choice_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_pod_choice_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[5].i;
 	const char *label;
@@ -400,6 +399,7 @@ static int ot_pod_choice_iterate(struct ot_node *node, struct ot_key *key, struc
 	static const char *step_labels[] = { "default", "min", "max", "step", NULL };
 	static const char *enum_labels[] = { "default", "alt%u" };
 	static const char *flags_labels[] = { "default", "flag%u" };
+	int res;
 
 	if ((index = key->index) < 0)
 		index += n_items;
@@ -427,10 +427,12 @@ static int ot_pod_choice_iterate(struct ot_node *node, struct ot_key *key, struc
 
 	snprintf(node->buffer, sizeof(node->buffer), label, index);
 
-	return ot_pod_set_value(sub, node->extra[4].cp, key->index, node->buffer,
+	res = ot_pod_set_value(sub, node->extra[4].cp, key->index, node->buffer,
 			node->extra[2].i,
 			SPA_MEMBER(node->extra[1].p, index * node->extra[3].i, void),
 			node->extra[3].i);
+	sub->parent = node;
+	return res;
 }
 
 static inline void ot_set_pod_choice(struct ot_node *node, const struct spa_type_info *info,
@@ -464,13 +466,14 @@ static const struct spa_pod_prop *find_nth_prop(void *body, uint32_t size, uint3
 	return NULL;
 }
 
-static int ot_pod_object_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_pod_object_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[4].i;
 	void *body = (void*)node->extra[1].p;
 	uint32_t size = node->extra[2].i;
 	const struct spa_type_info *info = node->extra[3].cp, *ii;
 	const struct spa_pod_prop *p;
+	int res;
 
 	if ((index = key->index) < 0)
 		index += n_items;
@@ -481,11 +484,13 @@ static int ot_pod_object_iterate(struct ot_node *node, struct ot_key *key, struc
 
 	ii = spa_debug_type_find(info, p->key);
 
-	return ot_pod_set_value(sub, ii ? ii->values : NULL, key->index,
+	res = ot_pod_set_value(sub, ii ? ii->values : NULL, key->index,
 			ii ? spa_debug_type_short_name(ii->name) : "*unknown*",
 			p->value.type,
 			SPA_POD_CONTENTS(struct spa_pod_prop, p),
 			p->value.size);
+	sub->parent = node;
+	return res;
 }
 
 static inline void ot_set_pod_object(struct ot_node *node, int32_t x, const char *k,
@@ -494,6 +499,7 @@ static inline void ot_set_pod_object(struct ot_node *node, int32_t x, const char
 	struct spa_pod_object_body *b = (struct spa_pod_object_body *)body;
 	const struct spa_type_info *ti, *ii;
 	const struct spa_pod_prop *p;
+	bool simple = true;
 
 	ti = spa_debug_type_find(NULL, b->type);
 	ii = ti ? spa_debug_type_find(ti->values, 0) : NULL;
@@ -505,12 +511,17 @@ static inline void ot_set_pod_object(struct ot_node *node, int32_t x, const char
 	node->extra[2].i = size;
 	node->extra[3].cp = ti ? ti->values : NULL;
 	node->extra[4].i = 0;
-	SPA_POD_OBJECT_BODY_FOREACH(body, size, p)
+	SPA_POD_OBJECT_BODY_FOREACH(body, size, p) {
 		node->extra[4].i++;
+		if (p->value.type > SPA_TYPE_String)
+			simple = false;
+	}
+	if (node->extra[4].i < 3 && simple)
+		node->flags |= NODE_FLAG_FLAT;
 }
 
 /* pod array */
-static int ot_pod_array_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_pod_array_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	int32_t index, n_items = node->extra[4].i;
 
@@ -551,22 +562,22 @@ static int ot_pod_set_value(struct ot_node *node, const struct spa_type_info *in
 		ot_set_string(node, x, k, spa_debug_type_find_short_name(info, *(int32_t*)body));
 		break;
 	case SPA_TYPE_Int:
-		ot_set_int(node, x, k, *(int32_t*)body);
+		ot_set_numberi(node, x, k, *(int32_t*)body);
 		break;
 	case SPA_TYPE_Long:
-		ot_set_long(node, x, k, *(int64_t*)body);
+		ot_set_numberi(node, x, k, *(int64_t*)body);
 		break;
 	case SPA_TYPE_Float:
-		ot_set_double(node, x, k, *(float*)body);
+		ot_set_number(node, x, k, *(float*)body);
 		break;
 	case SPA_TYPE_Double:
-		ot_set_double(node, x, k, *(double*)body);
+		ot_set_number(node, x, k, *(double*)body);
 		break;
 	case SPA_TYPE_String:
 		ot_set_string(node, x, k, (char*)body);
 		break;
 	case SPA_TYPE_Fd:
-		ot_set_int(node, x, k, *(int*)body);
+		ot_set_numberi(node, x, k, *(int*)body);
 		break;
 	case SPA_TYPE_Rectangle:
 		ot_set_pod_rectangle(node, x, k, type, body, size);
@@ -629,7 +640,7 @@ static const struct param *find_nth_param(struct spa_list *param_list, uint32_t 
 	return NULL;
 }
 
-static int ot_param_list_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_param_list_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct spa_list *param_list = &gl->param_list;
@@ -656,17 +667,18 @@ static int ot_param_list_iterate(struct ot_node *node, struct ot_key *key, struc
 		return 0;
 
 	ot_set_pod(sub, key->index, NULL, p->param);
+	sub->parent = node;
 	return 1;
 }
 
 /**
  * ParamInfo
  */
-static int ot_param_info_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_param_info_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct spa_param_info *params = node->extra[0].p;
 	struct global *gl = node->extra[2].p;
-	int32_t index, n_params = node->extra[1].i;
+	int32_t index, n_params = node->extra[1].l;
 	uint32_t id;
 
 	if ((index = key->index) < 0)
@@ -681,9 +693,10 @@ static int ot_param_info_iterate(struct ot_node *node, struct ot_key *key, struc
 
 	sub->extra[0].p = gl;
 	sub->extra[1].p = params;
-	sub->extra[2].i = index;
-	sub->extra[3].i = count_params(&gl->param_list, id);
+	sub->extra[2].l = index;
+	sub->extra[3].l = count_params(&gl->param_list, id);
 	sub->flags = NODE_FLAG_EXPENSIVE;
+	sub->parent = node;
 	return 1;
 }
 
@@ -693,7 +706,7 @@ static inline void ot_set_param_info(struct ot_node *node, int32_t x, const char
 {
 	ot_set_object(node, x, k, ot_param_info_iterate);
 	node->extra[0].p = params;
-	node->extra[1].i = n_params;
+	node->extra[1].l = n_params;
 	node->extra[2].p = gl;
 }
 
@@ -720,7 +733,7 @@ static void core_destroy(void *object)
 		pw_core_info_free(gl->info);
 }
 
-static int ot_core_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_core_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_core_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -733,10 +746,10 @@ static int ot_core_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, x, "cookie", i->cookie);
+		ot_set_numberi(sub, x, "cookie", i->cookie);
 		break;
 	case 2:
 		ot_set_string(sub, x, "user-name", i->user_name);
@@ -760,6 +773,7 @@ static int ot_core_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -802,7 +816,7 @@ static void module_destroy(void *object)
 		pw_module_info_free(gl->info);
 }
 
-static int ot_module_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_module_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_module_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -815,7 +829,7 @@ static int ot_module_iterate(struct ot_node *node, struct ot_key *key, struct ot
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
 		ot_set_string(sub, x, "name", i->name);
@@ -836,6 +850,7 @@ static int ot_module_iterate(struct ot_node *node, struct ot_key *key, struct ot
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -878,7 +893,7 @@ static void factory_destroy(void *object)
 		pw_factory_info_free(gl->info);
 }
 
-static int ot_factory_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_factory_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_factory_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -891,7 +906,7 @@ static int ot_factory_iterate(struct ot_node *node, struct ot_key *key, struct o
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
 		ot_set_string(sub, x, "name", i->name);
@@ -900,7 +915,7 @@ static int ot_factory_iterate(struct ot_node *node, struct ot_key *key, struct o
 		ot_set_string(sub, x, "type", i->type);
 		break;
 	case 3:
-		ot_set_int(sub, x, "version", i->version);
+		ot_set_numberi(sub, x, "version", i->version);
 		break;
 	case 4:
 		ot_set_mask(sub, x, "change-mask",
@@ -912,6 +927,7 @@ static int ot_factory_iterate(struct ot_node *node, struct ot_key *key, struct o
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -954,7 +970,7 @@ static void client_destroy(void *object)
 		pw_client_info_free(gl->info);
 }
 
-static int ot_client_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_client_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_client_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -967,7 +983,7 @@ static int ot_client_iterate(struct ot_node *node, struct ot_key *key, struct ot
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
 		ot_set_mask(sub, x, "change-mask",
@@ -979,6 +995,7 @@ static int ot_client_iterate(struct ot_node *node, struct ot_key *key, struct ot
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1048,7 +1065,7 @@ static void device_destroy(void *object)
 		pw_device_info_free(gl->info);
 }
 
-static int ot_device_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_device_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_device_info *i = gl->info;
@@ -1063,7 +1080,7 @@ static int ot_device_iterate(struct ot_node *node, struct ot_key *key, struct ot
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
 		ot_set_mask(sub, x, "change-mask",
@@ -1078,6 +1095,7 @@ static int ot_device_iterate(struct ot_node *node, struct ot_key *key, struct ot
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1148,7 +1166,7 @@ static void node_destroy(void *object)
 		pw_node_info_free(gl->info);
 }
 
-static int ot_node_info_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_node_info_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_node_info *i = gl->info;
@@ -1166,23 +1184,23 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_key *key, struct
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, x, "max-input-ports", i->max_input_ports);
+		ot_set_numberi(sub, x, "max-input-ports", i->max_input_ports);
 		break;
 	case 2:
-		ot_set_int(sub, x, "max-output-ports", i->max_output_ports);
+		ot_set_numberi(sub, x, "max-output-ports", i->max_output_ports);
 		break;
 	case 3:
 		ot_set_mask(sub, x, "change-mask",
 				i->change_mask, change_mask, SPA_N_ELEMENTS(change_mask));
 		break;
 	case 4:
-		ot_set_int(sub, x, "n-input-ports", i->n_input_ports);
+		ot_set_numberi(sub, x, "n-input-ports", i->n_input_ports);
 		break;
 	case 5:
-		ot_set_int(sub, x, "n-output-ports", i->n_output_ports);
+		ot_set_numberi(sub, x, "n-output-ports", i->n_output_ports);
 		break;
 	case 6:
 		ot_set_string(sub, x, "state", pw_node_state_as_string(i->state));
@@ -1199,6 +1217,7 @@ static int ot_node_info_iterate(struct ot_node *node, struct ot_key *key, struct
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1270,7 +1289,7 @@ static void port_destroy(void *object)
 }
 
 
-static int ot_port_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_port_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	struct pw_port_info *i = gl->info;
@@ -1285,7 +1304,7 @@ static int ot_port_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
 		ot_set_string(sub, x, "direction", pw_direction_as_string(i->direction));
@@ -1303,6 +1322,7 @@ static int ot_port_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1345,7 +1365,7 @@ static void link_destroy(void *object)
 		pw_link_info_free(gl->info);
 }
 
-static int ot_link_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_link_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct pw_link_info *i = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -1360,19 +1380,19 @@ static int ot_link_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", i->id);
+		ot_set_numberi(sub, x, "id", i->id);
 		break;
 	case 1:
-		ot_set_int(sub, x, "output-node-id", i->output_node_id);
+		ot_set_numberi(sub, x, "output-node-id", i->output_node_id);
 		break;
 	case 2:
-		ot_set_int(sub, x, "output-port-id", i->output_port_id);
+		ot_set_numberi(sub, x, "output-port-id", i->output_port_id);
 		break;
 	case 3:
-		ot_set_int(sub, x, "input-node-id", i->input_node_id);
+		ot_set_numberi(sub, x, "input-node-id", i->input_node_id);
 		break;
 	case 4:
-		ot_set_int(sub, x, "input-port-id", i->input_port_id);
+		ot_set_numberi(sub, x, "input-port-id", i->input_port_id);
 		break;
 	case 5:
 		ot_set_mask(sub, x, "change-mask",
@@ -1393,6 +1413,7 @@ static int ot_link_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1419,7 +1440,7 @@ static void on_core_done(void *data, uint32_t id, int seq)
 }
 
 
-static int ot_global_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_global_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *gl = node->extra[0].p;
 	static const struct mask_table change_mask[] = {
@@ -1434,13 +1455,13 @@ static int ot_global_iterate(struct ot_node *node, struct ot_key *key, struct ot
 
 	switch(index) {
 	case 0:
-		ot_set_int(sub, x, "id", gl->id);
+		ot_set_numberi(sub, x, "id", gl->id);
 		break;
 	case 1:
 		ot_set_string(sub, x, "type", gl->type);
 		break;
 	case 2:
-		ot_set_int(sub, x, "version", gl->version);
+		ot_set_numberi(sub, x, "version", gl->version);
 		break;
 	case 3:
 		ot_set_mask(sub, x, "permissions", gl->permissions,
@@ -1455,6 +1476,7 @@ static int ot_global_iterate(struct ot_node *node, struct ot_key *key, struct ot
 	default:
 		return 0;
 	}
+	sub->parent = node;
 	return 1;
 }
 
@@ -1473,7 +1495,7 @@ static struct global *global_get_nth(struct spa_list *list, int nth)
 	return NULL;
 }
 
-static int ot_root_iterate(struct ot_node *node, struct ot_key *key, struct ot_node *sub)
+static int ot_root_iterate(struct ot_node *node, const struct ot_key *key, struct ot_node *sub)
 {
 	struct global *global;
 	struct spa_list *global_list = node->extra[0].p;
@@ -1488,6 +1510,7 @@ static int ot_root_iterate(struct ot_node *node, struct ot_key *key, struct ot_n
 		return 0;
 
 	ot_global_enter(global, key->index, NULL, sub);
+	sub->parent = node;
 	return 1;
 }
 
