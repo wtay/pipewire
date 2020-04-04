@@ -179,24 +179,30 @@ int main(int argc, char *argv[])
 		}
 	}
 	data.loop = pw_main_loop_new(NULL);
-	if (data.loop == NULL)
+	if (data.loop == NULL) {
+		fprintf(stderr, "can't create main loop: %m\n");
 		return -1;
+	}
 
 	l = pw_main_loop_get_loop(data.loop);
 	pw_loop_add_signal(l, SIGINT, do_quit, &data);
 	pw_loop_add_signal(l, SIGTERM, do_quit, &data);
 
 	data.context = pw_context_new(l, NULL, 0);
-	if (data.context == NULL)
+	if (data.context == NULL) {
+		fprintf(stderr, "can't create context: %m\n");
 		return -1;
+	}
 
 	data.core = pw_context_connect(data.context,
 			pw_properties_new(
 				PW_KEY_REMOTE_NAME, opt_remote,
 				NULL),
 			0);
-	if (data.core == NULL)
+	if (data.core == NULL) {
+		fprintf(stderr, "can't connect: %m\n");
 		return -1;
+	}
 
 	pw_core_add_listener(data.core,
 			&data.core_listener,
