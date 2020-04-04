@@ -175,6 +175,7 @@ int main(int argc, char *argv[])
 			opt_monitor = true;
 			break;
 		default:
+			show_help(&data, argv[0]);
 			return -1;
 		}
 	}
