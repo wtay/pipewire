@@ -90,6 +90,8 @@ struct data {
 	struct spa_buffer *control_buffers[1];
 	struct buffer control_buffer[1];
 
+	struct spa_io_position position_io;
+
 	int buffer_count;
 	bool start_faid_in;
 	double volume_accum;
@@ -250,18 +252,21 @@ static int fade_in(struct data *data)
 	struct spa_pod_frame f[1];
 	void *buffer = data->control_buffer->datas[0].data;
 	uint32_t buffer_size = data->control_buffer->datas[0].maxsize;
+	uint32_t offset;
 	data->control_buffer->datas[0].chunk[0].size = buffer_size;
 
 	printf ("fading in\n");
+	offset = 0;
 
 	spa_pod_builder_init(&b, buffer, buffer_size);
 	spa_pod_builder_push_sequence(&b, &f[0], 0);
 	do {
-		spa_pod_builder_control(&b, 200, SPA_CONTROL_Properties);
+		spa_pod_builder_control(&b, offset, SPA_CONTROL_Properties);
 			spa_pod_builder_add_object(&b,
 			SPA_TYPE_OBJECT_Props, 0,
 			SPA_PROP_volume, SPA_POD_Float(data->volume_accum));
 		data->volume_accum += 0.003;
+		offset += 200;
 	} while (data->volume_accum < 1.0);
 	spa_pod_builder_pop(&b, &f[0]);
 
@@ -274,18 +279,21 @@ static int fade_out(struct data *data)
 	struct spa_pod_frame f[1];
 	void *buffer = data->control_buffer->datas[0].data;
 	uint32_t buffer_size = data->control_buffer->datas[0].maxsize;
+	uint32_t offset;
 	data->control_buffer->datas[0].chunk[0].size = buffer_size;
 
 	printf ("fading out\n");
+	offset = 0;
 
 	spa_pod_builder_init(&b, buffer, buffer_size);
 	spa_pod_builder_push_sequence(&b, &f[0], 0);
 	do {
-		spa_pod_builder_control(&b, 200, SPA_CONTROL_Properties);
+		spa_pod_builder_control(&b, offset, SPA_CONTROL_Properties);
 			spa_pod_builder_add_object(&b,
 			SPA_TYPE_OBJECT_Props, 0,
 			SPA_PROP_volume, SPA_POD_Float(data->volume_accum));
 		data->volume_accum -= 0.003;
+		offset += 200;
 	} while (data->volume_accum > 0.0);
 	spa_pod_builder_pop(&b, &f[0]);
 
@@ -479,6 +487,24 @@ static int make_nodes(struct data *data, const char *device)
 		return res;
 	}
 
+	/* set position on source and sink */
+
+	data->position_io.clock.rate = SPA_FRACTION(1, 48000);
+	data->position_io.clock.duration = 1024;
+
+	if ((res = spa_node_set_io(data->source_node,
+					SPA_IO_Position,
+					&data->position_io, sizeof(data->position_io))) < 0) {
+		printf("can't set io position on source node: %d\n", res);
+		return res;
+	}
+	if ((res = spa_node_set_io(data->sink_node,
+					SPA_IO_Position,
+					&data->position_io, sizeof(data->position_io))) < 0) {
+		printf("can't set io position on sink node: %d\n", res);
+		return res;
+	}
+
 	/* set io buffers on source and sink nodes */
 	data->source_sink_io[0] = SPA_IO_BUFFERS_INIT;
 	if ((res = spa_node_port_set_io(data->source_node,
@@ -624,8 +650,6 @@ static void *loop(void *user_data)
 
 	printf("leave thread\n");
 	spa_loop_control_leave(data->control);
-	return NULL;
-
 	return NULL;
 }
 
