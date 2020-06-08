@@ -56,42 +56,39 @@ static int spa_v4l2_open(struct impl *this)
 
 	spa_log_info(port->log, "v4l2: Playback device is '%s'", props->device);
 
-	if (stat(props->device, &st) < 0) {
-		err = errno;
-		spa_log_error(port->log, "v4l2: Cannot identify '%s': %d, %s",
-			      props->device, err, strerror(err));
-		return -err;
-	}
-
-	if (!S_ISCHR(st.st_mode)) {
-		spa_log_error(port->log, "v4l2: %s is no device", props->device);
-		return -ENODEV;
-	}
-
 	port->fd = open(props->device, O_RDWR | O_NONBLOCK, 0);
-
 	if (port->fd == -1) {
 		err = errno;
 		spa_log_error(port->log, "v4l2: Cannot open '%s': %d, %s",
 			      props->device, err, strerror(err));
-		return -err;
+		goto error;
+	}
+
+	if (fstat(port->fd, &st) < 0) {
+		err = errno;
+		spa_log_error(port->log, "v4l2: Cannot identify '%s': %d, %s",
+			      props->device, err, strerror(err));
+		goto error_close;
+	}
+
+	if (!S_ISCHR(st.st_mode)) {
+		spa_log_error(port->log, "v4l2: %s is no device", props->device);
+		err = -ENODEV;
+		goto error_close;
 	}
 
 	if (xioctl(port->fd, VIDIOC_QUERYCAP, &port->cap) < 0) {
 		err = errno;
 		spa_log_error(port->log, "QUERYCAP: %m");
-		close(port->fd);
-		port->fd = -1;
-		return -err;
+		goto error_close;
 	}
 
 	if ((port->cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) == 0 ||
 	    ((port->cap.capabilities & V4L2_CAP_DEVICE_CAPS) &&
 	     (port->cap.device_caps & V4L2_CAP_VIDEO_CAPTURE) == 0)) {
 		spa_log_error(port->log, "v4l2: %s is no video capture device", props->device);
-		close(port->fd);
-		port->fd = -1;
-		return -ENODEV;
+		err = -ENODEV;
+		goto error_close;
 	}
 
 	port->source.func = v4l2_on_fd_events;
@@ -103,6 +100,12 @@ static int spa_v4l2_open(struct impl *this)
 	port->opened = true;
 
 	return 0;
+
+error_close:
+	close(port->fd);
+	port->fd = -1;
+error:
+	return -err;
 }
 
 static int spa_v4l2_buffer_recycle(struct impl *this, uint32_t buffer_id)
@@ -1219,7 +1222,7 @@ static int spa_v4l2_use_buffers(struct impl *this, struct spa_buffer **buffers, 
 	int i;
 	struct spa_data *d;
 
-	if (n_buffers > 0) {
+	if (buffers && n_buffers > 0) {
 		d = buffers[0]->datas;
 
 		if (d[0].type == this->type.data.MemFd ||
