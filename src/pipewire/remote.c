@@ -791,6 +791,7 @@ static void add_port_update(struct pw_proxy *proxy, struct pw_port *port, uint32
 	uint32_t n_params = 0;
 	struct spa_pod **params = NULL;
 
+	spa_zero(pi);
 	if (change_mask & PW_CLIENT_NODE_PORT_UPDATE_PARAMS) {
 		uint32_t idx1, idx2, id;
 		uint8_t buf[2048];

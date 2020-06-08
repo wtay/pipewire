@@ -119,6 +119,7 @@ static inline bool spa_graph_data_iterate(struct spa_graph_data *data)
 				} else if (p->io->status == SPA_STATUS_OK)
 					n->ready[SPA_DIRECTION_INPUT]++;
 			}
+			/* fallthrough */
 		case SPA_GRAPH_STATE_CHECK_OUT:
 			spa_list_for_each(p, &n->ports[SPA_DIRECTION_OUTPUT], link)
 				spa_graph_data_port_check(data, p->peer);
