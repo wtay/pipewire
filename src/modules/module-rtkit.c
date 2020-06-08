@@ -444,7 +444,7 @@ static void idle_func(struct spa_source *source)
 	}
 
 	if ((r = pw_rtkit_make_realtime(system_bus, 0, rtprio)) < 0) {
-		pw_log_debug("could not make thread realtime: %s", strerror(r));
+		pw_log_debug("could not make thread realtime: %s", spa_strerror(r));
 	} else {
 		pw_log_debug("thread made realtime");
 	}
