@@ -1212,7 +1212,7 @@ static void do_input(void *data, int fd, enum spa_io mask)
 
 	if (mask & SPA_IO_IN) {
 		while (true) {
-			r = read(fd, buf, sizeof(buf));
+			r = read(fd, buf, sizeof(buf)-1);
 			if (r < 0) {
 				if (errno == EAGAIN)
 					continue;
