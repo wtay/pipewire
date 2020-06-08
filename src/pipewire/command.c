@@ -121,6 +121,7 @@ static struct pw_command *parse_command_module_load(const char *line, char **err
       no_module:
 	asprintf(err, "%s requires a module name", this->args[0]);
 	pw_free_strv(this->args);
+	free(impl);
 	return NULL;
       no_mem:
 	asprintf(err, "no memory");

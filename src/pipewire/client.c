@@ -167,8 +167,10 @@ struct pw_client *pw_client_new(struct pw_core *core,
 
 	if (properties == NULL)
 		properties = pw_properties_new(NULL, NULL);
-	if (properties == NULL)
+	if (properties == NULL) {
+		free(impl);
 		return NULL;
+	}
 
 	pw_array_init(&impl->permissions, 1024);
 

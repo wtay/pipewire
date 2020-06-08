@@ -211,13 +211,13 @@ pw_module_load(struct pw_core *core,
 	if ((init_func = dlsym(hnd, PIPEWIRE_SYMBOL_MODULE_INIT)) == NULL)
 		goto no_pw_module;
 
-	impl = calloc(1, sizeof(struct impl));
-	if (impl == NULL)
-		goto no_mem;
-
 	if (properties == NULL)
 		properties = pw_properties_new(NULL, NULL);
 	if (properties == NULL)
+		goto no_mem;
+
+	impl = calloc(1, sizeof(struct impl));
+	if (impl == NULL)
 		goto no_mem;
 
 	impl->hnd = hnd;

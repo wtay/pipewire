@@ -207,8 +207,10 @@ pw_client_node_transport_new(uint32_t max_input_ports, uint32_t max_output_ports
 			  PW_MEMBLOCK_FLAG_MAP_READWRITE |
 			  PW_MEMBLOCK_FLAG_SEAL,
 			  area_get_size(&area),
-			  &impl->mem) < 0)
+			  &impl->mem) < 0) {
+		free(impl);
 		return NULL;
+	}
 
 	memcpy(impl->mem->ptr, &area, sizeof(struct pw_client_node_area));
 	transport_setup_area(impl->mem->ptr, trans);

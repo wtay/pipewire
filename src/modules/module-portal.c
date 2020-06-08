@@ -128,7 +128,7 @@ static enum media_role parse_media_roles(const char *media_types_str)
 				     media_role_str);
 		}
 	}
-	free(buf);
+	free(buf_orig);
 
 	return media_roles;
 }

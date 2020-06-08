@@ -373,8 +373,10 @@ static int alloc_buffers(struct pw_link *this,
 
 	if ((res = pw_memblock_alloc(PW_MEMBLOCK_FLAG_WITH_FD |
 				     PW_MEMBLOCK_FLAG_MAP_READWRITE |
-				     PW_MEMBLOCK_FLAG_SEAL, n_buffers * data_size, &m)) < 0)
+				     PW_MEMBLOCK_FLAG_SEAL, n_buffers * data_size, &m)) < 0) {
+		free(buffers);
 		return res;
+	}
 
 	for (i = 0; i < n_buffers; i++) {
 		int j;
