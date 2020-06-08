@@ -135,7 +135,6 @@ static void *create_object(void *_data,
 
       no_resource:
 	pw_log_error("link factory needs a resource");
-	pw_resource_error(resource, -EINVAL, "no resource");
 	goto done;
       no_properties:
 	pw_log_error("link-factory needs properties");

@@ -185,6 +185,9 @@ setup_props(struct pw_core *core, struct spa_node *spa_node, struct pw_propertie
 		if ((prop = spa_pod_find_prop(props, id))) {
 			const char *value = pw_properties_get(pw_props, key);
 
+			if (value == NULL)
+				continue;
+
 			pw_log_info("configure prop %s", key);
 
 			switch(prop->body.value.type) {
