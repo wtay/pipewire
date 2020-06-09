@@ -712,9 +712,9 @@ on_format_changed (void *data,
     spa_pod_builder_init (&b, buffer, sizeof (buffer));
     params[0] = spa_pod_builder_object (&b,
 	t->param.idBuffers, t->param_buffers.Buffers,
-	":", t->param_buffers.size,    "ir", 0,  SPA_PROP_RANGE(0, INT32_MAX),
-	":", t->param_buffers.stride,  "ir", 0,  SPA_PROP_RANGE(0, INT32_MAX),
-	":", t->param_buffers.buffers, "ir", 16, SPA_PROP_RANGE(1, INT32_MAX),
+	":", t->param_buffers.size,    "iru", 0,  SPA_PROP_RANGE(0, INT32_MAX),
+	":", t->param_buffers.stride,  "iru", 0,  SPA_PROP_RANGE(0, INT32_MAX),
+	":", t->param_buffers.buffers, "iru", 16, SPA_PROP_RANGE(1, INT32_MAX),
 	":", t->param_buffers.align,   "i", 16);
 
     params[1] = spa_pod_builder_object (&b,
