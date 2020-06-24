@@ -64,7 +64,7 @@ struct global {
 
 	uint32_t id;
 	uint32_t permissions;
-	const char *type;
+	char *type;
 	uint32_t version;
 	const struct object_info *object_info;
 	struct pw_properties *props;
@@ -86,6 +86,7 @@ struct data {
 
 	struct pw_registry *registry;
 	struct spa_hook registry_listener;
+	struct spa_hook registry_proxy_listener;
 
 	int pending_seq;
 	int last_seq;
@@ -151,6 +152,13 @@ static struct param *add_param(struct spa_list *param_list,
 }
 
 static void
+removed_proxy (void *data)
+{
+        struct global *gl = data;
+	pw_proxy_destroy(gl->proxy);
+}
+
+static void
 destroy_proxy (void *data)
 {
         struct global *gl = data;
@@ -158,13 +166,16 @@ destroy_proxy (void *data)
 	clear_params(&gl->param_list, SPA_ID_INVALID);
 
 	if (gl->object_info && gl->object_info->destroy)
-		gl->object_info->destroy(gl->info);
+		gl->object_info->destroy(gl);
 
-	spa_list_remove(&gl->link);
+	spa_hook_remove(&gl->object_listener),
+	spa_hook_remove(&gl->proxy_listener),
+	gl->proxy = NULL;
 }
 
 static const struct pw_proxy_events proxy_events = {
 	PW_VERSION_PROXY_EVENTS,
+	.removed = removed_proxy,
 	.destroy = destroy_proxy,
 };
 
@@ -1545,6 +1556,31 @@ static const struct object_info *find_info(const char *type, uint32_t version)
 	return NULL;
 }
 
+static struct global *find_global(struct data *d, uint32_t id)
+{
+	struct global *gl;
+	spa_list_for_each(gl, &d->global_list, link) {
+		if (gl->id == id)
+			return gl;
+	}
+	return NULL;
+}
+
+static void destroy_global(struct global *gl)
+{
+	struct data *d = gl->data;
+	if (gl->proxy)
+		pw_proxy_destroy(gl->proxy);
+
+	d->n_globals--;
+	spa_list_remove(&gl->link);
+
+	free(gl->type);
+	if (gl->props)
+		pw_properties_free(gl->props);
+	free(gl);
+}
+
 static void registry_event_global(void *data, uint32_t id,
 				  uint32_t permissions, const char *type, uint32_t version,
 				  const struct spa_dict *props)
@@ -1576,11 +1612,17 @@ static void registry_event_global(void *data, uint32_t id,
 
 static void registry_event_global_remove(void *object, uint32_t id)
 {
+	struct global *gl;
         struct data *d = object;
 	char path[10];
 
+	if ((gl = find_global(d, id)) == NULL)
+		return;
+
 	snprintf(path, sizeof(path), "/%u", id);
 	pw_tree_emit_removed(d, path);
+
+	destroy_global(gl);
 }
 
 static const struct pw_registry_events registry_events = {
@@ -1592,6 +1634,20 @@ static const struct pw_registry_events registry_events = {
 static const struct pw_core_events core_events = {
 	PW_VERSION_CORE_EVENTS,
 	.done = on_core_done,
+};
+
+static void
+removed_registry_proxy (void *_data)
+{
+	struct data *data = _data;
+	if (data->registry)
+		pw_proxy_destroy((struct pw_proxy*)data->registry);
+	data->registry = NULL;
+}
+
+static const struct pw_proxy_events registry_proxy_events = {
+	PW_VERSION_PROXY_EVENTS,
+	.removed = removed_registry_proxy,
 };
 
 struct pw_tree * pw_tree_new(struct pw_core *core)
@@ -1619,6 +1675,9 @@ struct pw_tree * pw_tree_new(struct pw_core *core)
 	pw_registry_add_listener(data->registry,
 			&data->registry_listener,
 			&registry_events, data);
+	pw_proxy_add_listener((struct pw_proxy*)data->registry,
+			&data->registry_proxy_listener,
+			&registry_proxy_events, data);
 	return tree;
 }
 
@@ -1638,5 +1697,13 @@ int pw_tree_get_root(struct pw_tree *tree, struct ot_node *node)
 
 void pw_tree_destroy(struct pw_tree *tree)
 {
+	struct data *data = &tree->data;
+	struct global *gl;
+
+	spa_list_consume(gl, &data->global_list, link)
+		destroy_global(gl);
+
+	if (data->registry)
+		pw_proxy_destroy((struct pw_proxy*)data->registry);
 	free(tree);
 }

@@ -250,8 +250,11 @@ int main(int argc, char *argv[])
 	if (opt_monitor)
 		pw_main_loop_run(data.loop);
 
+	pw_core_disconnect(data.core);
+	pw_tree_destroy(data.tree);
 	pw_context_destroy(data.context);
 	pw_main_loop_destroy(data.loop);
+	pw_deinit();
 
 	return 0;
 }
