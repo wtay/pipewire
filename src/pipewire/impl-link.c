@@ -75,7 +75,7 @@ static struct pw_node_peer *pw_node_peer_ref(struct pw_impl_node *onode, struct 
 
 	spa_list_append(&onode->peer_list, &peer->link);
 	pw_log_debug("new peer %p from %p to %p", peer, onode, inode);
-	pw_impl_node_emit_peer_added(onode, inode);
+	pw_impl_node_add_target(onode, &peer->target);
 
 	return peer;
 }
@@ -86,7 +86,7 @@ static void pw_node_peer_unref(struct pw_node_peer *peer)
 		return;
 	spa_list_remove(&peer->link);
 	pw_log_debug("remove peer %p from %p to %p", peer, peer->output, peer->target.node);
-	pw_impl_node_emit_peer_removed(peer->output, peer->target.node);
+	pw_impl_node_remove_target(peer->output, &peer->target);
 	free(peer);
 }
 
@@ -100,8 +100,8 @@ static void pw_node_peer_activate(struct pw_node_peer *peer)
 		spa_list_append(&peer->output->rt.target_list, &peer->target.link);
 
 		if (!peer->target.active && peer->output->rt.driver_target.node != NULL) {
-			if (!peer->output->async)
-				SPA_ATOMIC_INC(state->required);
+//			if (!peer->output->async)
+//				SPA_ATOMIC_INC(state->required);
 			peer->target.active = true;
 		}
 	}
@@ -118,8 +118,8 @@ static void pw_node_peer_deactivate(struct pw_node_peer *peer)
 
 		if (peer->target.active) {
 			if (!peer->output->async) {
-				SPA_ATOMIC_DEC(state->required);
-				trigger_target(&peer->target, get_time_ns(peer->target.system));
+//				SPA_ATOMIC_DEC(state->required);
+//				trigger_target(&peer->target, get_time_ns(peer->target.system));
 			}
 			peer->target.active = false;
 		}

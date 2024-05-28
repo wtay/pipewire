@@ -94,21 +94,10 @@ static struct link *find_activation(struct spa_list *links, uint32_t node_id)
 	return NULL;
 }
 
-static int
-do_deactivate_link(struct spa_loop *loop,
-                bool async, uint32_t seq, const void *data, size_t size, void *user_data)
-{
-	struct link *link = user_data;
-	pw_log_trace("link %p deactivate", link);
-	spa_list_remove(&link->target.link);
-	return 0;
-}
-
 static void clear_link(struct node_data *data, struct link *link)
 {
 	pw_log_debug("link %p", link);
-	pw_loop_invoke(data->data_loop,
-		do_deactivate_link, SPA_ID_INVALID, NULL, 0, true, link);
+	pw_impl_node_remove_target(data->node, &link->target);
 	pw_memmap_free(link->map);
 	spa_system_close(link->target.system, link->target.fd);
 	spa_list_remove(&link->link);
@@ -803,17 +792,6 @@ exit:
 }
 
 static int
-do_activate_link(struct spa_loop *loop,
-                bool async, uint32_t seq, const void *data, size_t size, void *user_data)
-{
-	struct link *link = user_data;
-	struct node_data *d = link->data;
-	pw_log_trace("link %p activate", link);
-	spa_list_append(&d->node->rt.target_list, &link->target.link);
-	return 0;
-}
-
-static int
 client_node_set_activation(void *_data,
                         uint32_t node_id,
                         int signalfd,
@@ -863,10 +841,9 @@ client_node_set_activation(void *_data,
 		link->target.fd = signalfd;
 		spa_list_append(&data->links, &link->link);
 
-		pw_loop_invoke(data->data_loop,
-                       do_activate_link, SPA_ID_INVALID, NULL, 0, false, link);
+		pw_impl_node_add_target(node, &link->target);
 
-		pw_log_debug("node %p: add link %p: memid:%u fd:%d id:%u state:%p pending:%d/%d",
+		pw_log_info("node %p: add link %p: memid:%u fd:%d id:%u state:%p pending:%d/%d",
 				node, link, memid, signalfd, node_id,
 				&link->target.activation->state[0],
 				link->target.activation->state[0].pending,
@@ -877,7 +854,7 @@ client_node_set_activation(void *_data,
 			res = -ENOENT;
 			goto error_exit;
 		}
-		pw_log_debug("node %p: remove link %p: id:%u state:%p pending:%d/%d",
+		pw_log_info("node %p: remove link %p: id:%u state:%p pending:%d/%d",
 				node, link, node_id,
 				&link->target.activation->state[0],
 				link->target.activation->state[0].pending,

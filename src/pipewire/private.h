@@ -542,6 +542,7 @@ struct pw_node_target {
 	struct spa_system *system;
 	int fd;
 	unsigned int active:1;
+	unsigned int added:1;
 };
 
 static inline void copy_target(struct pw_node_target *dst, const struct pw_node_target *src)
@@ -774,7 +775,6 @@ struct pw_impl_node {
 		struct spa_ratelimit rate_limit;
 
 		bool prepared;				/**< the node was added to loop */
-		bool added;				/**< the node was added to driver */
 	} rt;
 	struct spa_fraction target_rate;
 	uint64_t target_quantum;
@@ -1296,6 +1296,9 @@ int pw_impl_node_set_driver(struct pw_impl_node *node, struct pw_impl_node *driv
 int pw_impl_node_trigger(struct pw_impl_node *node);
 
 int pw_impl_node_set_io(struct pw_impl_node *node, uint32_t id, void *data, size_t size);
+
+int pw_impl_node_add_target(struct pw_impl_node *node, struct pw_node_target *t);
+int pw_impl_node_remove_target(struct pw_impl_node *node, struct pw_node_target *t);
 
 /** Prepare a link
   * Starts the negotiation of formats and buffers on \a link */

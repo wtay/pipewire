@@ -1347,8 +1347,6 @@ void pw_impl_client_node_registered(struct pw_impl_client_node *this, struct pw_
 					  0,
 					  sizeof(struct pw_node_activation));
 
-	node_peer_added(impl, node);
-
 	if (impl->bind_node_id) {
 		pw_global_bind(global, client, PW_PERM_ALL,
 				impl->bind_node_version, impl->bind_node_id);
@@ -1707,16 +1705,6 @@ static void node_port_removed(void *data, struct pw_impl_port *port)
 	clear_port(impl, p);
 }
 
-static void node_driver_changed(void *data, struct pw_impl_node *old, struct pw_impl_node *driver)
-{
-	struct impl *impl = data;
-
-	pw_log_debug("%p: driver changed %p -> %p", impl, old, driver);
-
-	node_peer_removed(data, old);
-	node_peer_added(data, driver);
-}
-
 static const struct pw_impl_node_events node_events = {
 	PW_VERSION_IMPL_NODE_EVENTS,
 	.free = node_free,
@@ -1726,7 +1714,6 @@ static const struct pw_impl_node_events node_events = {
 	.port_removed = node_port_removed,
 	.peer_added = node_peer_added,
 	.peer_removed = node_peer_removed,
-	.driver_changed = node_driver_changed,
 };
 
 static const struct pw_resource_events resource_events = {
