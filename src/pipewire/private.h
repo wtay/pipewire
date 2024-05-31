@@ -923,7 +923,6 @@ struct pw_control_link {
 
 struct pw_node_peer {
 	int ref;
-	int active_count;
 	struct spa_list link;			/**< link in peer list */
 	struct pw_impl_node *output;		/**< the output node */
 	struct pw_node_target target;		/**< target of the input node */

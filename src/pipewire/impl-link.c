@@ -69,7 +69,6 @@ static struct pw_node_peer *pw_node_peer_ref(struct pw_impl_node *onode, struct 
 
 	peer->ref = 1;
 	peer->output = onode;
-	peer->active_count = 0;
 	copy_target(&peer->target, &inode->rt.target);
 	peer->target.flags = PW_NODE_TARGET_PEER;
 
@@ -88,44 +87,6 @@ static void pw_node_peer_unref(struct pw_node_peer *peer)
 	pw_log_debug("remove peer %p from %p to %p", peer, peer->output, peer->target.node);
 	pw_impl_node_remove_target(peer->output, &peer->target);
 	free(peer);
-}
-
-static void pw_node_peer_activate(struct pw_node_peer *peer)
-{
-	struct pw_node_activation_state *state;
-
-	state = &peer->target.activation->state[0];
-
-	if (peer->active_count++ == 0) {
-		spa_list_append(&peer->output->rt.target_list, &peer->target.link);
-
-		if (!peer->target.active && peer->output->rt.driver_target.node != NULL) {
-//			if (!peer->output->async)
-//				SPA_ATOMIC_INC(state->required);
-			peer->target.active = true;
-		}
-	}
-	pw_log_trace("%p: node:%s state:%p pending:%d/%d", peer->output,
-			peer->target.name, state, state->pending, state->required);
-}
-
-static void pw_node_peer_deactivate(struct pw_node_peer *peer)
-{
-	struct pw_node_activation_state *state;
-	state = &peer->target.activation->state[0];
-	if (--peer->active_count == 0) {
-		spa_list_remove(&peer->target.link);
-
-		if (peer->target.active) {
-			if (!peer->output->async) {
-//				SPA_ATOMIC_DEC(state->required);
-//				trigger_target(&peer->target, get_time_ns(peer->target.system));
-			}
-			peer->target.active = false;
-		}
-	}
-	pw_log_trace("%p: node:%s state:%p pending:%d/%d", peer->output,
-			peer->target.name, state, state->pending, state->required);
 }
 
 static void info_changed(struct pw_impl_link *link)
@@ -694,17 +655,6 @@ error:
 	return res;
 }
 
-static int
-do_activate_link(struct spa_loop *loop,
-		 bool async, uint32_t seq, const void *data, size_t size, void *user_data)
-{
-	struct pw_impl_link *this = user_data;
-	pw_log_trace("%p: activate", this);
-	if (this->peer)
-		pw_node_peer_activate(this->peer);
-	return 0;
-}
-
 int pw_impl_link_activate(struct pw_impl_link *this)
 {
 	struct impl *impl = SPA_CONTAINER_OF(this, struct impl, this);
@@ -732,9 +682,6 @@ int pw_impl_link_activate(struct pw_impl_link *this)
 	if ((res = port_set_io(this, this->output, io_type, this->io,
 					io_size, &this->rt.out_mix)) < 0)
 		goto error_clean;
-
-	pw_loop_invoke(this->output->node->data_loop,
-	       do_activate_link, SPA_ID_INVALID, NULL, 0, false, this);
 
 	impl->activated = true;
 	pw_log_info("(%s) activated", this->name);
@@ -902,17 +849,6 @@ int pw_impl_link_prepare(struct pw_impl_link *this)
 	return 0;
 }
 
-static int
-do_deactivate_link(struct spa_loop *loop,
-		   bool async, uint32_t seq, const void *data, size_t size, void *user_data)
-{
-        struct pw_impl_link *this = user_data;
-	pw_log_trace("%p: disable out %p", this, &this->rt.out_mix);
-	if (this->peer)
-		pw_node_peer_deactivate(this->peer);
-	return 0;
-}
-
 int pw_impl_link_deactivate(struct pw_impl_link *this)
 {
 	struct impl *impl = SPA_CONTAINER_OF(this, struct impl, this);
@@ -921,9 +857,6 @@ int pw_impl_link_deactivate(struct pw_impl_link *this)
 
 	if (!impl->activated)
 		return 0;
-
-	pw_loop_invoke(this->output->node->data_loop,
-		       do_deactivate_link, SPA_ID_INVALID, NULL, 0, true, this);
 
 	port_set_io(this, this->output, SPA_IO_Buffers, NULL, 0,
 			&this->rt.out_mix);
