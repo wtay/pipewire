@@ -775,6 +775,7 @@ struct pw_impl_node {
 		struct spa_ratelimit rate_limit;
 
 		bool prepared;				/**< the node was added to loop */
+		void (*trigger_targets) (struct pw_impl_node *node, int status, uint64_t nsec);
 	} rt;
 	struct spa_fraction target_rate;
 	uint64_t target_quantum;

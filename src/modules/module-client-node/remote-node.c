@@ -843,7 +843,7 @@ client_node_set_activation(void *_data,
 
 		pw_impl_node_add_target(node, &link->target);
 
-		pw_log_info("node %p: add link %p: memid:%u fd:%d id:%u state:%p pending:%d/%d",
+		pw_log_debug("node %p: add link %p: memid:%u fd:%d id:%u state:%p pending:%d/%d",
 				node, link, memid, signalfd, node_id,
 				&link->target.activation->state[0],
 				link->target.activation->state[0].pending,
@@ -854,7 +854,7 @@ client_node_set_activation(void *_data,
 			res = -ENOENT;
 			goto error_exit;
 		}
-		pw_log_info("node %p: remove link %p: id:%u state:%p pending:%d/%d",
+		pw_log_debug("node %p: remove link %p: id:%u state:%p pending:%d/%d",
 				node, link, node_id,
 				&link->target.activation->state[0],
 				link->target.activation->state[0].pending,
