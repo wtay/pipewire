@@ -192,6 +192,7 @@ struct stream {
 
 	unsigned int ready:1;
 	unsigned int running:1;
+	unsigned int transfered:1;
 };
 
 struct impl {
@@ -598,6 +599,7 @@ static void sink_process(void *d, struct spa_io_position *position)
 		p->cleared = false;
 	}
 	ffado_streaming_transfer_playback_buffers(impl->dev);
+	s->transfered = true;
 
 	if (impl->mode == MODE_SINK) {
 		pw_log_trace_fp("done %u", impl->frame_time);
@@ -617,6 +619,7 @@ static void silence_playback(struct impl *impl)
 			clear_port_buffer(p, impl->period_size);
 	}
 	ffado_streaming_transfer_playback_buffers(impl->dev);
+	s->transfered = true;
 }
 
 static void source_process(void *d, struct spa_io_position *position)
@@ -630,6 +633,8 @@ static void source_process(void *d, struct spa_io_position *position)
 	if (!impl->triggered) {
 		pw_log_trace_fp("done %u", impl->frame_time);
 		impl->done = true;
+		if (!impl->sink.transfered)
+			silence_playback(impl);
 		set_timeout(impl, position->clock.nsec);
 		return;
 	}
@@ -637,6 +642,7 @@ static void source_process(void *d, struct spa_io_position *position)
 	impl->triggered = false;
 
 	ffado_streaming_transfer_capture_buffers(impl->dev);
+	s->transfered = true;
 
 	for (i = 0; i < s->n_ports; i++) {
 		struct port *p = s->ports[i];
@@ -975,8 +981,13 @@ again:
 	source_running = impl->source.running && impl->sink.ready;
 	sink_running = impl->sink.running && impl->source.ready;
 
-	if (!source_running)
+	impl->source.transfered = false;
+	impl->sink.transfered = false;
+
+	if (!source_running) {
 		ffado_streaming_transfer_capture_buffers(impl->dev);
+		impl->source.transfered = true;
+	}
 	if (!sink_running)
 		silence_playback(impl);
 
