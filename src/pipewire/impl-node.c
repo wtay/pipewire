@@ -86,8 +86,8 @@ static inline void activate_target(struct pw_impl_node *node, struct pw_node_tar
 
 static inline void deactivate_target(struct pw_impl_node *node, struct pw_node_target *t, uint64_t trigger)
 {
-	struct pw_node_activation_state *state = &t->activation->state[0];
 	if (t->active) {
+		struct pw_node_activation_state *state = &t->activation->state[0];
 		if (!node->async) {
 			/* the driver copies the required to the pending state
 			 * so first try to resume the node and then decrement the
@@ -206,24 +206,16 @@ do_node_unprepare(struct spa_loop *loop, bool async, uint32_t seq,
 
 static void add_node_to_graph(struct pw_impl_node *node)
 {
-	struct pw_impl_node *driver = node->driver_node;
-
 	if (node->remote)
 		return;
-
-	pw_log_debug("%p: driver:%p", node, driver);
 
 	pw_loop_invoke(node->data_loop, do_node_prepare, 1, NULL, 0, true, node);
 }
 
 static void remove_node_from_graph(struct pw_impl_node *node)
 {
-	struct pw_impl_node *driver = node->driver_node;
-
 	if (node->remote)
 		return;
-
-	pw_log_debug("%p: driver:%p", node, driver);
 
 	pw_loop_invoke(node->data_loop, do_node_unprepare, 1, NULL, 0, true, node);
 }

@@ -279,6 +279,7 @@ struct link {
 	struct pw_memmap *mem;
 	struct pw_node_activation *activation;
 	int signalfd;
+	bool active;
 };
 
 struct context {
@@ -420,6 +421,9 @@ struct client {
 		struct spa_io_position *position;
 		struct pw_node_activation *driver_activation;
 		struct spa_list target_links;
+		unsigned int prepared:1;
+		unsigned int first:1;
+		unsigned int thread_entered:1;
 	} rt;
 
 	pthread_mutex_t rt_lock;
@@ -429,8 +433,6 @@ struct client {
 	unsigned int started:1;
 	unsigned int active:1;
 	unsigned int destroyed:1;
-	unsigned int first:1;
-	unsigned int thread_entered:1;
 	unsigned int has_transport:1;
 	unsigned int allow_mlock:1;
 	unsigned int warn_mlock:1;
@@ -1834,10 +1836,10 @@ static inline uint32_t cycle_run(struct client *c)
 
 	activation->awake_time = get_time_ns(c->l->system);
 
-	if (SPA_UNLIKELY(c->first)) {
+	if (SPA_UNLIKELY(c->rt.first)) {
 		if (c->thread_init_callback)
 			c->thread_init_callback(c->thread_init_arg);
-		c->first = false;
+		c->rt.first = false;
 	}
 
 	if (SPA_UNLIKELY(pos == NULL)) {
@@ -1887,9 +1889,58 @@ static inline uint32_t cycle_wait(struct client *c)
 	return nframes;
 }
 
+static void trigger_link(struct link *l, uint64_t nsec)
+{
+	struct client *c = l->client;
+	struct pw_node_activation *a = l->activation;
+	struct pw_node_activation_state *state = &a->state[0];
+	uint64_t cmd = 1;
+
+	pw_log_trace_fp("%p: link %p %p %d/%d", c, l, state,
+			state->pending, state->required);
+
+	if (pw_node_activation_state_dec(state)) {
+		if (SPA_ATOMIC_CAS(a->status,
+				PW_NODE_ACTIVATION_NOT_TRIGGERED,
+				PW_NODE_ACTIVATION_TRIGGERED)) {
+			a->signal_time = nsec;
+
+			pw_log_trace_fp("%p: signal %p %p", c, l, state);
+
+			if (SPA_UNLIKELY(write(l->signalfd, &cmd, sizeof(cmd)) != sizeof(cmd)))
+				pw_log_warn("%p: write failed %m", c);
+		}
+	}
+}
+
+static inline void activate_link(struct client *c, struct link *l)
+{
+	if (SPA_UNLIKELY(!l->active)) {
+		if (!c->async) {
+			struct pw_node_activation_state *state = &l->activation->state[0];
+			SPA_ATOMIC_INC(state->required);
+                        SPA_ATOMIC_INC(state->pending);
+		}
+		l->active = true;
+	}
+}
+
+static inline void deactivate_link(struct client *c, struct link *l, uint64_t trigger)
+{
+	if (SPA_UNLIKELY(l->active)) {
+		if (!c->async) {
+			struct pw_node_activation_state *state = &l->activation->state[0];
+			if (trigger != 0)
+				trigger_link(l, trigger);
+			SPA_ATOMIC_DEC(state->required);
+		}
+		l->active = false;
+	}
+}
+
 static inline void signal_sync(struct client *c)
 {
-	uint64_t cmd, nsec;
+	uint64_t nsec;
 	struct link *l;
 	struct pw_node_activation *activation = c->activation;
 	int old_status;
@@ -1903,30 +1954,12 @@ static inline void signal_sync(struct client *c)
 	if (c->async || old_status != PW_NODE_ACTIVATION_AWAKE)
 		return;
 
-	cmd = 1;
 	spa_list_for_each(l, &c->rt.target_links, target_link) {
-		struct pw_node_activation_state *state;
-
 		if (SPA_UNLIKELY(l->activation == NULL))
 			continue;
 
-		state = &l->activation->state[0];
-
-		pw_log_trace_fp("%p: link %p %p %d/%d", c, l, state,
-				state->pending, state->required);
-
-		if (pw_node_activation_state_dec(state)) {
-			if (SPA_ATOMIC_CAS(l->activation->status,
-					PW_NODE_ACTIVATION_NOT_TRIGGERED,
-					PW_NODE_ACTIVATION_TRIGGERED)) {
-				l->activation->signal_time = nsec;
-
-				pw_log_trace_fp("%p: signal %p %p", c, l, state);
-
-				if (SPA_UNLIKELY(write(l->signalfd, &cmd, sizeof(cmd)) != sizeof(cmd)))
-					pw_log_warn("%p: write failed %m", c);
-			}
-		}
+		activate_link(c, l);
+		trigger_link(l, nsec);
 	}
 }
 
@@ -1967,8 +2000,8 @@ on_rtsocket_condition(void *data, int fd, uint32_t mask)
 		return;
 	}
 	if (SPA_UNLIKELY(c->thread_callback)) {
-		if (!c->thread_entered) {
-			c->thread_entered = true;
+		if (!c->rt.thread_entered) {
+			c->rt.thread_entered = true;
 			c->thread_callback(c->thread_arg);
 		}
 	} else if (SPA_LIKELY(mask & SPA_IO_IN)) {
@@ -2106,7 +2139,7 @@ do_update_driver_activation(struct spa_loop *loop,
 	c->rt.position = c->position;
 	c->rt.driver_activation = c->driver_activation;
 	if (c->position) {
-		pw_log_info("%p: driver:%d clock:%s", c,
+		pw_log_debug("%p: driver:%d clock:%s", c,
 				c->driver_id, c->position->clock.name);
 		check_sample_rate(c, c->position);
 		check_buffer_frames(c, c->position);
@@ -2194,6 +2227,49 @@ static int client_node_event(void *data, const struct spa_event *event)
 	return -ENOTSUP;
 }
 
+static int do_prepare_client(struct spa_loop *loop, bool async, uint32_t seq,
+		const void *data, size_t size, void *user_data)
+{
+	struct client *c = user_data;
+
+	if (c->rt.prepared)
+		return 0;
+
+	pw_loop_update_io(c->l,
+			  c->socket_source,
+			  SPA_IO_IN | SPA_IO_ERR | SPA_IO_HUP);
+
+	c->rt.first = true;
+	c->rt.thread_entered = false;
+        c->rt.prepared = true;
+	return 0;
+}
+
+static int do_unprepare_client(struct spa_loop *loop, bool async, uint32_t seq,
+		const void *data, size_t size, void *user_data)
+{
+	struct client *c = user_data;
+	int old_state;
+	uint64_t trigger = 0;
+	struct link *l;
+
+	if (!c->rt.prepared)
+		return 0;
+
+	old_state = SPA_ATOMIC_XCHG(c->activation->status, PW_NODE_ACTIVATION_FINISHED);
+	if (old_state != PW_NODE_ACTIVATION_FINISHED)
+		trigger = get_time_ns(c->l->system);
+
+        spa_list_for_each(l, &c->rt.target_links, target_link)
+                deactivate_link(c, l, trigger);
+
+	pw_loop_update_io(c->l,
+			  c->socket_source, SPA_IO_ERR | SPA_IO_HUP);
+
+        c->rt.prepared = false;
+	return 0;
+}
+
 static int client_node_command(void *data, const struct spa_command *command)
 {
 	struct client *c = (struct client *) data;
@@ -2204,21 +2280,17 @@ static int client_node_command(void *data, const struct spa_command *command)
 	case SPA_NODE_COMMAND_Suspend:
 	case SPA_NODE_COMMAND_Pause:
 		if (c->started) {
-			pw_loop_update_io(c->l,
-					  c->socket_source, SPA_IO_ERR | SPA_IO_HUP);
-
+			pw_data_loop_invoke(c->loop,
+				do_unprepare_client, SPA_ID_INVALID, NULL, 0, false, c);
 			c->started = false;
 		}
 		break;
 
 	case SPA_NODE_COMMAND_Start:
 		if (!c->started) {
-			pw_loop_update_io(c->l,
-					  c->socket_source,
-					  SPA_IO_IN | SPA_IO_ERR | SPA_IO_HUP);
+			pw_data_loop_invoke(c->loop,
+				do_prepare_client, SPA_ID_INVALID, NULL, 0, false, c);
 			c->started = true;
-			c->first = true;
-			c->thread_entered = false;
 		}
 		break;
 	default:
@@ -2898,7 +2970,7 @@ exit:
 }
 
 static int
-do_activate_link(struct spa_loop *loop,
+do_add_link(struct spa_loop *loop,
                 bool async, uint32_t seq, const void *data, size_t size, void *user_data)
 {
 	struct link *link = user_data;
@@ -2909,12 +2981,22 @@ do_activate_link(struct spa_loop *loop,
 }
 
 static int
-do_deactivate_link(struct spa_loop *loop,
+do_remove_link(struct spa_loop *loop,
                 bool async, uint32_t seq, const void *data, size_t size, void *user_data)
 {
 	struct link *link = user_data;
+	struct client *c = link->client;
+
 	pw_log_trace("link %p activate", link);
 	spa_list_remove(&link->target_link);
+
+	if (c->rt.prepared) {
+		int old_state = SPA_ATOMIC_LOAD(c->activation->status);
+		uint64_t trigger = 0;
+		if (old_state != PW_NODE_ACTIVATION_FINISHED)
+			trigger = get_time_ns(c->l->system);
+		deactivate_link(c, link, trigger);
+	}
 	free_link(link);
 	return 0;
 }
@@ -2969,7 +3051,7 @@ static int client_node_set_activation(void *data,
 		spa_list_append(&c->links, &link->link);
 
 		pw_data_loop_invoke(c->loop,
-                       do_activate_link, SPA_ID_INVALID, NULL, 0, false, link);
+                       do_add_link, SPA_ID_INVALID, NULL, 0, false, link);
 	}
 	else {
 		link = find_activation(&c->links, node_id);
@@ -2980,7 +3062,7 @@ static int client_node_set_activation(void *data,
 		spa_list_remove(&link->link);
 
 		pw_data_loop_invoke(c->loop,
-                       do_deactivate_link, SPA_ID_INVALID, NULL, 0, false, link);
+                       do_remove_link, SPA_ID_INVALID, NULL, 0, false, link);
 	}
 
 	if (c->driver_id == node_id)
@@ -5942,7 +6024,7 @@ static int check_connect(struct client *c, struct object *src, struct object *ds
 	dst_self = dst->port.node_id == c->node_id ? 1 : 0;
 	sum = src_self + dst_self;
 
-	pw_log_info("sum %d %d", sum, c->self_connect_mode);
+	pw_log_debug("sum %d %d", sum, c->self_connect_mode);
 
 	/* check for other connection first */
 	if (sum == 0)
