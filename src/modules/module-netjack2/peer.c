@@ -242,14 +242,71 @@ static inline void fix_midi_event(uint8_t *data, size_t size)
 	}
 }
 
+static inline void *n2j_midi_buffer_reserve(struct nj2_midi_buffer *buf,
+		uint32_t offset, uint32_t size)
+{
+	struct nj2_midi_event *ev;
+	void *ptr;
+
+	if (size <= 0)
+		return NULL;
+
+	size_t used_size = sizeof(*buf) + buf->write_pos +
+		((buf->event_count + 1) * sizeof(struct nj2_midi_event));
+
+	ev = &buf->event[buf->event_count];
+	ev->time = offset;
+	ev->size = size;
+	if (size <= MIDI_INLINE_MAX) {
+		ptr = ev->buffer;
+	} else {
+		if (used_size + size > buf->buffer_size)
+			return NULL;
+		buf->write_pos += size;
+		ev->offset = buf->buffer_size - 1 - buf->write_pos;
+		ptr = SPA_PTROFF(buf, ev->offset, void);
+	}
+	buf->event_count++;
+	return ptr;
+}
+
+static inline void n2j_midi_buffer_write(struct nj2_midi_buffer *buf,
+		uint32_t offset, void *data, uint32_t size)
+{
+	void *ptr = n2j_midi_buffer_reserve(buf, offset, size);
+	if (ptr != NULL)
+		memcpy(ptr, data, size);
+	else
+		buf->lost_events++;
+}
+
+static inline void n2j_midi_buffer_append(struct nj2_midi_buffer *buf,
+		void *data, uint32_t size)
+{
+	struct nj2_midi_event *ev;
+	uint32_t old_size;
+	uint8_t *old_ptr, *new_ptr;
+
+	ev = &buf->event[--buf->event_count];
+	old_size = ev->size;
+	if (old_size <= MIDI_INLINE_MAX) {
+		old_ptr = ev->buffer;
+	} else {
+		buf->write_pos -= old_size;
+		old_ptr = SPA_PTROFF(buf, ev->offset, void);
+	}
+	new_ptr = n2j_midi_buffer_reserve(buf, ev->time, old_size + size);
+	memmove(new_ptr, old_ptr, old_size);
+	memcpy(new_ptr+old_size, data, size);
+}
+
 static void midi_to_netjack2(struct netjack2_peer *peer,
 		struct nj2_midi_buffer *buf, float *src, uint32_t n_samples)
 {
 	struct spa_pod *pod;
 	struct spa_pod_sequence *seq;
 	struct spa_pod_control *c;
-	struct nj2_midi_event *ev;
-	int free_size;
+	bool in_sysex = false;
 
 	buf->magic = MIDI_BUFFER_MAGIC;
 	buf->buffer_size = peer->quantum_limit * sizeof(float);
@@ -269,12 +326,10 @@ static void midi_to_netjack2(struct netjack2_peer *peer,
 
 	seq = (struct spa_pod_sequence*)pod;
 
-	free_size = buf->buffer_size - sizeof(*buf);
-
 	SPA_POD_SEQUENCE_FOREACH(seq, c) {
 		int size;
 		uint8_t data[16];
-		void *ptr;
+		bool was_sysex = in_sysex;
 
 		if (c->type != SPA_CONTROL_UMP)
 			continue;
@@ -284,29 +339,24 @@ static void midi_to_netjack2(struct netjack2_peer *peer,
 		if (size <= 0)
 			continue;
 
-		if (c->offset >= n_samples ||
-		    size >= free_size) {
+		if (c->offset >= n_samples) {
 			buf->lost_events++;
 			continue;
 		}
 
-		if (peer->fix_midi)
+		if (!in_sysex && data[0] == 0xf0)
+			in_sysex = true;
+
+		if (!in_sysex && peer->fix_midi)
 			fix_midi_event(data, size);
 
-		ev = &buf->event[buf->event_count];
-		ev->time = c->offset;
-		ev->size = size;
-		if (size <= MIDI_INLINE_MAX) {
-			ptr = ev->buffer;
-		} else {
-			buf->write_pos += size;
-			ev->offset = buf->buffer_size - 1 - buf->write_pos;
-			free_size -= size;
-			ptr = SPA_PTROFF(buf, ev->offset, void);
-		}
-		memcpy(ptr, data, size);
-		buf->event_count++;
-		free_size -= sizeof(*ev);
+		if (in_sysex && data[size-1] == 0xf7)
+			in_sysex = false;
+
+		if (was_sysex)
+			n2j_midi_buffer_append(buf, data, size);
+		else
+			n2j_midi_buffer_write(buf, c->offset, data, size);
 	}
 	if (buf->write_pos > 0)
 		memmove(SPA_PTROFF(buf, sizeof(*buf) + buf->event_count * sizeof(struct nj2_midi_event), void),

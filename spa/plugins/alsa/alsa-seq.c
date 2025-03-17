@@ -60,6 +60,7 @@ static int seq_open(struct seq_state *state, struct seq_conn *conn, bool with_qu
 		spa_log_debug(state->log, "%p: ALSA UMP MIDI enabled", state);
 		state->ump = true;
 	}
+	state->ump = false;
 
 	return 0;
 }
@@ -802,6 +803,7 @@ static int process_write(struct seq_state *state)
 		struct spa_pod_control *c;
 		uint64_t out_time;
 		snd_seq_real_time_t out_rt;
+		bool first = true;
 
 		if (!port->valid || io == NULL)
 			continue;
@@ -866,13 +868,20 @@ static int process_write(struct seq_state *state)
 				if ((size = spa_ump_to_midi((uint32_t *)body, body_size, data, sizeof(data))) <= 0)
 					continue;
 
-				snd_seq_ev_clear(&ev);
+				if (first)
+					snd_seq_ev_clear(&ev);
 
-				snd_midi_event_reset_encode(stream->codec);
-				if ((size = snd_midi_event_encode(stream->codec, data, size, &ev)) <= 0) {
+				if ((size = snd_midi_event_encode(stream->codec, data, size, &ev)) < 0) {
 					spa_log_warn(state->log, "failed to encode event: %s", snd_strerror(size));
+					snd_midi_event_reset_encode(stream->codec);
+					first = true;
 					continue;
 				}
+				first = false;
+				if (ev.type == SND_SEQ_EVENT_NONE)
+					/* this can happen when the event is not complete yet, like
+					 * a sysex message and we need to encode some more data. */
+					continue;
 
 				snd_seq_ev_set_source(&ev, state->event.addr.port);
 				snd_seq_ev_set_dest(&ev, port->addr.client, port->addr.port);
@@ -882,6 +891,7 @@ static int process_write(struct seq_state *state)
 					spa_log_warn(state->log, "failed to output event: %s",
 							snd_strerror(err));
 				}
+				first = true;
 			}
 		}
 	}
