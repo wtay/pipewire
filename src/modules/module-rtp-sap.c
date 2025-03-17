@@ -660,7 +660,7 @@ static void update_ts_refclk(struct impl *impl)
 
 static int make_sdp(struct impl *impl, struct session *sess, char *buffer, size_t buffer_size)
 {
-	char src_addr[64], dst_addr[64], dst_ttl[8];
+	char src_addr[64], dst_addr[64], dst_ttl[8], ptime[32];
 	struct sdp_info *sdp = &sess->info;
 	bool src_ip4, dst_ip4;
 	bool multicast;
@@ -738,7 +738,7 @@ static int make_sdp(struct impl *impl, struct session *sess, char *buffer, size_
 
 	if (sdp->ptime > 0)
 		spa_strbuf_append(&buf,
-			"a=ptime:%.6g\n", sdp->ptime);
+			"a=ptime:%s\n", spa_dtoa(ptime, sizeof(ptime), sdp->ptime));
 
 	if (sdp->framecount > 0)
 		spa_strbuf_append(&buf,
