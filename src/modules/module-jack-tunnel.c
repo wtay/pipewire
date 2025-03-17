@@ -55,6 +55,12 @@
  * - `jack.client-name`: the name of the JACK client.
  * - `jack.connect`: if jack ports should be connected automatically. Can also be
  *                   placed per stream.
+ * - `jack.connect-audio`: An array of audio ports to connect to. Can also be placed per
+ *                   stream. An empty array will not connect anything, even when
+ *                   jack.connect is true.
+ * - `jack.connect-midi`: An array of midi ports to connect to. Can also be placed per
+ *                   stream. An empty array will not connect anything, even when
+ *                   jack.connect is true.
  * - `tunnel.mode`: the tunnel mode, sink|source|duplex, default duplex
  * - `midi.ports`: the number of midi ports. Can also be added to the stream props.
  * - `source.props`: Extra properties for the source filter.
@@ -86,6 +92,8 @@
  *         #jack.server      = null
  *         #jack.client-name = PipeWire
  *         #jack.connect     = true
+ *         #jack.connect-audio = [ playback_1 playback_2 ]
+ *         #jack.connect-midi = [ midi_playback_1 ]
  *         #tunnel.mode      = duplex
  *         #midi.ports       = 0
  *         #audio.channels   = 2
@@ -118,6 +126,8 @@ PW_LOG_TOPIC_STATIC(mod_topic, "mod." NAME);
 			"( jack.server=<server name> ) "			\
 			"( jack.client-name=<name of the JACK client> ] "	\
 			"( jack.connect=<bool, autoconnect ports> ] "		\
+			"( jack.connect-audio=<array, port names to connect> ] "\
+			"( jack.connect-midi=<array, port names to connect> ] " \
 			"( tunnel.mode=<sink|source|duplex> ] "			\
 			"( midi.ports=<number of midi ports> ] "		\
 			"( audio.channels=<number of channels> ] "		\
@@ -164,7 +174,6 @@ struct stream {
 	struct volume volume;
 
 	unsigned int running:1;
-	unsigned int connect:1;
 };
 
 struct impl {
@@ -450,10 +459,10 @@ static void make_stream_ports(struct stream *s)
 	struct pw_properties *props;
 	const char *str, *prefix, *type;
 	char name[256];
-	const char **audio_ports = NULL, **link_ports = NULL;
-	const char **midi_ports = NULL;
+	char **audio_ports = NULL, **midi_ports = NULL;
 	unsigned long jack_peer, jack_flags;
-	bool is_midi;
+	bool do_connect, is_midi, strv_audio = false, strv_midi = false;
+	int res, n_audio_ports = 0, n_midi_ports = 0;
 
 	if (s->direction == PW_DIRECTION_INPUT) {
 		/* sink */
@@ -467,14 +476,28 @@ static void make_stream_ports(struct stream *s)
 		prefix = "capture";
 	}
 
-	if (s->connect) {
-		audio_ports = jack.get_ports(impl->client, NULL, JACK_DEFAULT_AUDIO_TYPE,
+	do_connect = pw_properties_get_bool(s->props, "jack.connect", true);
+
+	str = pw_properties_get(s->props, "jack.connect-audio");
+	if (str != NULL) {
+		audio_ports = pw_strv_parse(str, strlen(str), INT_MAX, NULL);
+		strv_audio = true;
+	} else if (do_connect) {
+		audio_ports = (char**)jack.get_ports(impl->client, NULL, JACK_DEFAULT_AUDIO_TYPE,
 	                                JackPortIsPhysical|jack_peer);
-		midi_ports = jack.get_ports(impl->client, NULL, JACK_DEFAULT_MIDI_TYPE,
+	}
+	str = pw_properties_get(s->props, "jack.connect-midi");
+	if (str != NULL) {
+		midi_ports = pw_strv_parse(str, strlen(str), INT_MAX, NULL);
+		strv_midi = true;
+	} else if (do_connect) {
+		midi_ports = (char**)jack.get_ports(impl->client, NULL, JACK_DEFAULT_MIDI_TYPE,
 	                                JackPortIsPhysical|jack_peer);
 	}
 	for (i = 0; i < s->n_ports; i++) {
 		struct port *port = s->ports[i];
+		char *link_port = NULL;
+
 		if (port != NULL) {
 			s->ports[i] = NULL;
 			if (port->jack_port)
@@ -498,7 +521,9 @@ static void make_stream_ports(struct stream *s)
 					NULL);
 
 			type = JACK_DEFAULT_AUDIO_TYPE;
-			link_ports = audio_ports;
+			if (audio_ports && audio_ports[n_audio_ports])
+				link_port = audio_ports[n_audio_ports++];
+
 			is_midi = false;
 		} else {
 			snprintf(name, sizeof(name), "%s_%d", prefix, i - s->info.channels);
@@ -509,7 +534,8 @@ static void make_stream_ports(struct stream *s)
 					NULL);
 
 			type = JACK_DEFAULT_MIDI_TYPE;
-			link_ports = midi_ports;
+			if (midi_ports && midi_ports[n_midi_ports])
+				link_port = midi_ports[n_midi_ports++];
 			is_midi = true;
 		}
 
@@ -522,21 +548,35 @@ static void make_stream_ports(struct stream *s)
 		port->is_midi = is_midi;
 		port->jack_port = jack.port_register (impl->client, name, type, jack_flags, 0);
 
-		if (link_ports != NULL && link_ports[i] != NULL) {
+		if (link_port != NULL) {
 			if (jack_flags & JackPortIsOutput) {
-				if (jack.connect(impl->client, jack.port_name(port->jack_port), link_ports[i]))
-					pw_log_warn("cannot connect ports");
+				pw_log_info("connecting ports '%s' to '%s'",
+							jack.port_name(port->jack_port), link_port);
+				if ((res = jack.connect(impl->client, jack.port_name(port->jack_port), link_port)))
+					pw_log_warn("cannot connect ports '%s' to '%s': %s",
+							jack.port_name(port->jack_port), link_port, strerror(res));
 			} else {
-				if (jack.connect(impl->client, link_ports[i], jack.port_name(port->jack_port)))
-					pw_log_warn("cannot connect ports");
+				pw_log_info("connecting ports '%s' to '%s'",
+							link_port, jack.port_name(port->jack_port));
+				if ((res = jack.connect(impl->client, link_port, jack.port_name(port->jack_port))))
+					pw_log_warn("cannot connect ports '%s' to '%s': %s",
+							link_port, jack.port_name(port->jack_port), strerror(res));
 			}
 		}
 		s->ports[i] = port;
 	}
-	if (audio_ports)
-		jack.free(audio_ports);
-	if (midi_ports)
-		jack.free(midi_ports);
+	if (audio_ports) {
+		if (strv_audio)
+			pw_free_strv(audio_ports);
+		else
+			jack.free(audio_ports);
+	}
+	if (midi_ports) {
+		if (strv_midi)
+			pw_free_strv(midi_ports);
+		else
+			jack.free(midi_ports);
+	}
 }
 
 static struct spa_pod *make_props_param(struct spa_pod_builder *b,
@@ -640,8 +680,7 @@ static int make_stream(struct stream *s, const char *name)
 	n_params = 0;
 	spa_pod_builder_init(&b, buffer, sizeof(buffer));
 
-	s->filter = pw_filter_new(impl->core, name, s->props);
-	s->props = NULL;
+	s->filter = pw_filter_new(impl->core, name, pw_properties_copy(s->props));
 	if (s->filter == NULL)
 		return -errno;
 
@@ -930,12 +969,8 @@ static int create_jack_client(struct impl *impl)
 	impl->source.info.rate = impl->samplerate;
 	impl->sink.info.rate = impl->samplerate;
 
-	return 0;
-}
-
-static int start_jack_clients(struct impl *impl)
-{
 	jack.activate(impl->client);
+
 	return 0;
 }
 
@@ -1121,6 +1156,8 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 	copy_props(impl, props, PW_KEY_NODE_GROUP);
 	copy_props(impl, props, PW_KEY_NODE_VIRTUAL);
 	copy_props(impl, props, "jack.connect");
+	copy_props(impl, props, "jack.connect-audio");
+	copy_props(impl, props, "jack.connect-midi");
 
 	parse_audio_info(impl->source.props, &impl->source.info);
 	parse_audio_info(impl->sink.props, &impl->sink.info);
@@ -1137,11 +1174,6 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 		res = -EINVAL;
 		goto error;
 	}
-
-	impl->source.connect = pw_properties_get_bool(impl->source.props,
-			"jack.connect", true);
-	impl->sink.connect = pw_properties_get_bool(impl->sink.props,
-			"jack.connect", true);
 
 	impl->core = pw_context_get_object(impl->context, PW_TYPE_INTERFACE_Core);
 	if (impl->core == NULL) {
@@ -1170,9 +1202,6 @@ int pipewire__module_init(struct pw_impl_module *module, const char *args)
 		goto error;
 
 	if ((res = create_filters(impl)) < 0)
-		goto error;
-
-	if ((res = start_jack_clients(impl)) < 0)
 		goto error;
 
 	pw_impl_module_add_listener(module, &impl->module_listener, &module_events, impl);
