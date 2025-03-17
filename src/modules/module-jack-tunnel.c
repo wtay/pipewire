@@ -511,7 +511,7 @@ static void make_stream_ports(struct stream *s)
 			if (str)
 				snprintf(name, sizeof(name), "%s_%s", prefix, str);
 			else
-				snprintf(name, sizeof(name), "%s_%d", prefix, i);
+				snprintf(name, sizeof(name), "%s_%d", prefix, i+1);
 
 			props = pw_properties_new(
 					PW_KEY_FORMAT_DSP, "32 bit float mono audio",
@@ -526,7 +526,7 @@ static void make_stream_ports(struct stream *s)
 
 			is_midi = false;
 		} else {
-			snprintf(name, sizeof(name), "%s_%d", prefix, i - s->info.channels);
+			snprintf(name, sizeof(name), "midi_%s_%d", prefix, i - s->info.channels + 1);
 			props = pw_properties_new(
 					PW_KEY_FORMAT_DSP, "32 bit raw UMP",
 					PW_KEY_PORT_NAME, name,
