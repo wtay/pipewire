@@ -47,6 +47,9 @@ context.properties = {
 
     # Load the pulseaudio emulation daemon
     minimal.use-pulse = true
+
+    # Load the jack-tunnel as a backend
+    minimal.use-jack-tunnel = false
 }
 
 context.properties.rules = [
@@ -152,6 +155,36 @@ context.modules = [
 
     { name = libpipewire-module-protocol-pulse
       condition = [ { minimal.use-pulse = true } ]
+    }
+
+    { name = libpipewire-module-jack-tunnel
+        args = {
+            #jack.library     = libjack.so.0
+            #jack.server      = null
+            #jack.client-name = PipeWire
+            #jack.connect     = true
+            #tunnel.mode      = duplex
+            #midi.ports       = 0
+            #audio.channels   = 2
+            #audio.position   = [ FL FR ]
+            source.props = {
+                # extra sink properties
+		# jack-tunnel needs a PortConfig from the
+		# session manager so do this here.
+                node.param.PortConfig    = {
+                    direction = Output
+                    mode = dsp
+                }
+            }
+            sink.props = {
+                # extra sink properties
+                node.param.PortConfig    = {
+                    direction = Input
+                    mode = dsp
+                }
+            }
+	}
+        condition = [ { minimal.use-jack-tunnel = true } ]
     }
 ]
 
