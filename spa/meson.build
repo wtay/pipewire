@@ -46,7 +46,7 @@ if get_option('spa-plugins').allowed()
   alsa_dep = dependency('alsa', version : '>=1.2.6', required: get_option('alsa'))
   summary({'ALSA': alsa_dep.found()}, bool_yn: true, section: 'Backend')
 
-  if alsa_dep.version().version_compare('>=1.2.10')
+  if alsa_dep.version().version_compare('>=1.2.11')
     cdata.set('HAVE_ALSA_UMP', true)
   endif
 
