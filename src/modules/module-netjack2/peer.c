@@ -296,8 +296,12 @@ static inline void n2j_midi_buffer_append(struct nj2_midi_buffer *buf,
 		old_ptr = SPA_PTROFF(buf, ev->offset, void);
 	}
 	new_ptr = n2j_midi_buffer_reserve(buf, ev->time, old_size + size);
-	memmove(new_ptr, old_ptr, old_size);
-	memcpy(new_ptr+old_size, data, size);
+	if (new_ptr == NULL) {
+		buf->lost_events++;
+	} else {
+		memmove(new_ptr, old_ptr, old_size);
+		memcpy(new_ptr+old_size, data, size);
+	}
 }
 
 static void midi_to_netjack2(struct netjack2_peer *peer,
