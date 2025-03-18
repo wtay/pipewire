@@ -224,6 +224,7 @@ struct stage {
 
 struct filter_graph {
 	struct impl *impl;
+	struct spa_list link;
 	int order;
 	struct spa_handle *handle;
 	struct spa_filter_graph *graph;
@@ -232,7 +233,8 @@ struct filter_graph {
 	uint32_t inputs_position[SPA_AUDIO_MAX_CHANNELS];
 	uint32_t n_outputs;
 	uint32_t outputs_position[SPA_AUDIO_MAX_CHANNELS];
-	bool active;
+	bool removing;
+	bool setup;
 };
 
 struct impl {
@@ -245,9 +247,12 @@ struct impl {
 	struct spa_plugin_loader *loader;
 
 	uint32_t n_graph;
-	uint32_t graph_index[MAX_GRAPH];
+	struct filter_graph *filter_graph[MAX_GRAPH];
 
-	struct filter_graph filter_graph[MAX_GRAPH];
+	struct spa_list free_graphs;
+	struct spa_list active_graphs;
+	struct filter_graph graphs[MAX_GRAPH];
+
 	int in_filter_props;
 	int filter_props_count;
 
@@ -305,6 +310,8 @@ struct impl {
 
 	char group_name[128];
 
+	uint32_t maxsize;
+	uint32_t maxports;
 	uint32_t scratch_size;
 	uint32_t scratch_ports;
 	float *empty;
@@ -818,8 +825,8 @@ static int impl_node_enum_params(void *object, int seq,
 				SPA_PROP_INFO_params, SPA_POD_Bool(true));
 			break;
 		default:
-			if (this->filter_graph[0].graph) {
-				res = spa_filter_graph_enum_prop_info(this->filter_graph[0].graph,
+			if (this->filter_graph[0] && this->filter_graph[0]->graph) {
+				res = spa_filter_graph_enum_prop_info(this->filter_graph[0]->graph,
 						result.index - 30, &b, &param);
 				if (res <= 0)
 					return res;
@@ -911,13 +918,13 @@ static int impl_node_enum_params(void *object, int seq,
 			param = spa_pod_builder_pop(&b, &f[0]);
 			break;
 		default:
-			if (result.index > MAX_GRAPH)
+			if (result.index-1 >= this->n_graph)
 				return 0;
 
-			if (this->filter_graph[result.index-1].graph == NULL)
+			if (this->filter_graph[result.index-1]->graph == NULL)
 				goto next;
 
-			res = spa_filter_graph_get_props(this->filter_graph[result.index-1].graph,
+			res = spa_filter_graph_get_props(this->filter_graph[result.index-1]->graph,
 						&b, &param);
 			if (res < 0)
 				return res;
@@ -966,7 +973,7 @@ static void graph_info(void *object, const struct spa_filter_graph_info *info)
 	struct spa_dict *props = info->props;
 	uint32_t i;
 
-	if (!g->active)
+	if (g->removing)
 		return;
 
 	g->n_inputs = info->n_inputs;
@@ -993,7 +1000,7 @@ static void graph_apply_props(void *object, enum spa_direction direction, const 
 {
 	struct filter_graph *g = object;
 	struct impl *impl = g->impl;
-	if (!g->active)
+	if (g->removing)
 		return;
 	if (apply_props(impl, props) > 0)
 		emit_node_info(impl, false);
@@ -1003,7 +1010,7 @@ static void graph_props_changed(void *object, enum spa_direction direction)
 {
 	struct filter_graph *g = object;
 	struct impl *impl = g->impl;
-	if (!g->active)
+	if (g->removing)
 		return;
 	impl->info.change_mask |= SPA_NODE_CHANGE_MASK_PARAMS;
 	impl->params[IDX_Props].user++;
@@ -1023,7 +1030,7 @@ static int setup_filter_graph(struct impl *this, struct filter_graph *g,
 	char rate_str[64], in_ports[64];
 	struct dir *dir;
 
-	if (g == NULL || g->graph == NULL)
+	if (g == NULL || g->graph == NULL || g->setup)
 		return 0;
 
 	dir = &this->dir[SPA_DIRECTION_REVERSE(this->direction)];
@@ -1043,45 +1050,87 @@ static int setup_filter_graph(struct impl *this, struct filter_graph *g,
 					     SPA_DICT_ITEM(SPA_KEY_AUDIO_RATE, rate_str),
 					     SPA_DICT_ITEM("filter-graph.n_inputs", channels ? in_ports : NULL)));
 
+	g->setup = res >= 0;
+
 	return res;
+}
+
+static int setup_channelmix(struct impl *this, uint32_t channels, uint32_t *position);
+
+static int setup_filter_graphs(struct impl *impl)
+{
+	int res;
+	uint32_t channels, *position;
+	struct dir *in, *out;
+	struct filter_graph *g, *t;
+
+	in = &impl->dir[SPA_DIRECTION_INPUT];
+	out = &impl->dir[SPA_DIRECTION_OUTPUT];
+
+	channels = in->format.info.raw.channels;
+	position = in->format.info.raw.position;
+	impl->maxports = SPA_MAX(in->format.info.raw.channels, out->format.info.raw.channels);
+
+	spa_list_for_each_safe(g, t, &impl->active_graphs, link) {
+		if (g->removing)
+			continue;
+		if ((res = setup_filter_graph(impl, g, channels, position)) < 0) {
+			g->removing = true;
+			spa_log_warn(impl->log, "failed to activate graph %d: %s", g->order,
+					spa_strerror(res));
+		} else {
+			channels = g->n_outputs;
+			position = g->outputs_position;
+			impl->maxports = SPA_MAX(impl->maxports, channels);
+		}
+	}
+	if ((res = setup_channelmix(impl, channels, position)) < 0)
+		return res;
+
+	return 0;
 }
 
 static int do_sync_filter_graph(struct spa_loop *loop, bool async, uint32_t seq,
 		const void *data, size_t size, void *user_data)
 {
 	struct impl *impl = user_data;
-	uint32_t i, j;
-	impl->n_graph = 0;
-	for (i = 0; i < MAX_GRAPH; i++) {
-		struct filter_graph *g = &impl->filter_graph[i];
-		if (g->graph == NULL || !g->active)
-			continue;
-		impl->graph_index[impl->n_graph++] = i;
+	struct filter_graph *g;
 
-		for (j = impl->n_graph-1; j > 0; j--) {
-			if (impl->filter_graph[impl->graph_index[j]].order >=
-			    impl->filter_graph[impl->graph_index[j-1]].order)
-				break;
-			SPA_SWAP(impl->graph_index[j], impl->graph_index[j-1]);
-		}
-	}
+	impl->n_graph = 0;
+	spa_list_for_each(g, &impl->active_graphs, link)
+		if (g->setup && !g->removing)
+			impl->filter_graph[impl->n_graph++] = g;
+
 	impl->recalc = true;
 	return 0;
 }
 
 static void clean_filter_handles(struct impl *impl, bool force)
 {
-	uint32_t i;
-	for (i = 0; i < MAX_GRAPH; i++) {
-		struct filter_graph *g = &impl->filter_graph[i];
-		if (!g->active || force) {
-			if (g->graph)
-				spa_hook_remove(&g->listener);
-			if (g->handle)
-				spa_plugin_loader_unload(impl->loader, g->handle);
-			spa_zero(*g);
-		}
+	struct filter_graph *g, *t;
+
+	spa_list_for_each_safe(g, t, &impl->active_graphs, link) {
+		if (!g->removing)
+			continue;
+		spa_list_remove(&g->link);
+		if (g->graph)
+			spa_hook_remove(&g->listener);
+		if (g->handle)
+			spa_plugin_loader_unload(impl->loader, g->handle);
+		spa_zero(*g);
+		spa_list_append(&impl->free_graphs, &g->link);
 	}
+}
+
+static inline void insert_graph(struct spa_list *graphs, struct filter_graph *pending)
+{
+	struct filter_graph *g;
+
+	spa_list_for_each(g, graphs, link) {
+		if (g->order < pending->order)
+                        break;
+	}
+	spa_list_append(&g->link, &pending->link);
 }
 
 static int load_filter_graph(struct impl *impl, const char *graph, int order)
@@ -1090,35 +1139,29 @@ static int load_filter_graph(struct impl *impl, const char *graph, int order)
 	int res;
 	void *iface;
 	struct spa_handle *new_handle = NULL;
-	uint32_t i, idx, n_graph;
-	struct filter_graph *pending, *old_active = NULL;
+	struct filter_graph *pending, *g, *t;
 
 	if (impl->props.filter_graph_disabled)
 		return -EPERM;
 
 	/* find graph spot */
-	idx = SPA_ID_INVALID;
-	n_graph = 0;
-	for (i = 0; i < MAX_GRAPH; i++) {
-		pending = &impl->filter_graph[i];
-		/* find the first free spot for our new filter */
-		if (!pending->active && idx == SPA_ID_INVALID)
-			idx = i;
-		/* deactivate an existing filter of the same order */
-		if (pending->active) {
-			if (pending->order == order)
-				old_active = pending;
-			else
-				n_graph++;
-		}
-	}
-	/* we can at most have MAX_GRAPH-1 active filters */
-	if (n_graph >= MAX_GRAPH-1)
+	if (spa_list_is_empty(&impl->free_graphs))
 		return -ENOSPC;
 
-	pending = &impl->filter_graph[idx];
+	/* find free graph for our new filter */
+	pending = spa_list_first(&impl->free_graphs, struct filter_graph, link);
+
 	pending->impl = impl;
 	pending->order = order;
+	pending->removing = false;
+
+	/* move active graphs with same order to inactive list */
+	spa_list_for_each_safe(g, t, &impl->active_graphs, link) {
+		if (g->order == order) {
+			g->removing = true;
+			spa_log_info(impl->log, "removing filter-graph order:%d", order);
+		}
+	}
 
 	if (graph != NULL && graph[0] != '\0') {
 		snprintf(qlimit, sizeof(qlimit), "%u", impl->quantum_limit);
@@ -1137,32 +1180,17 @@ static int load_filter_graph(struct impl *impl, const char *graph, int order)
 
 		/* prepare new filter and swap it */
 		pending->graph = iface;
-		res = setup_filter_graph(impl, pending, 0, NULL);
-		if (res < 0) {
-			pending->graph = NULL;
-			goto error;
-		}
-		pending->active = true;
-		spa_log_info(impl->log, "loading filter-graph order:%d in %d active:%d",
-				order, idx, n_graph + 1);
-	} else {
-		pending->active = false;
-		spa_log_info(impl->log, "removing filter-graph order:%d active:%d",
-				order, n_graph);
-	}
-	if (old_active)
-		old_active->active = false;
-
-	/* we call this here on the pending_graph so that the n_input/n_output is updated
-	 * before we switch */
-	if (pending->active)
+		pending->handle = new_handle;
 		spa_filter_graph_add_listener(pending->graph,
 				&pending->listener, &graph_events, pending);
+		spa_list_remove(&pending->link);
+		insert_graph(&impl->active_graphs, pending);
+
+		spa_log_info(impl->log, "loading filter-graph order:%d", order);
+	}
+	res = setup_filter_graphs(impl);
 
 	spa_loop_invoke(impl->data_loop, do_sync_filter_graph, 0, NULL, 0, true, impl);
-
-	if (pending->active)
-		pending->handle = new_handle;
 
 	if (impl->in_filter_props == 0)
 		clean_filter_handles(impl, false);
@@ -1742,16 +1770,15 @@ static int impl_node_set_param(void *object, uint32_t id, uint32_t flags,
 	}
 	case SPA_PARAM_Props:
 	{
-		uint32_t i;
 		bool have_graph = false;
+		struct filter_graph *g, *t;
 		this->filter_props_count = 0;
-		for (i = 0; i < MAX_GRAPH; i++) {
-			struct filter_graph *g = &this->filter_graph[i];
-			if (!g->active)
+
+		spa_list_for_each_safe(g, t, &this->active_graphs, link) {
+			if (g->removing)
 				continue;
 
 			have_graph = true;
-
 			this->in_filter_props++;
 			spa_filter_graph_set_props(g->graph,
 					SPA_DIRECTION_INPUT, param);
@@ -1958,12 +1985,6 @@ static int setup_channelmix(struct impl *this, uint32_t channels, uint32_t *posi
 		dst_mask |= 1ULL << (p < 64 ? p : 0);
 	}
 
-	/* if we needed a channel conversion but we already did one before this
-	 * stage, assume we are now with the dst layout */
-	if ((out->format.info.raw.channels != in->format.info.raw.channels) &&
-	    channels != in->format.info.raw.channels)
-		src_mask = dst_mask;
-
 	spa_log_info(this->log, "in  %s (%016"PRIx64")", format_position(str, sizeof(str),
 				src_chan, position), src_mask);
 	spa_log_info(this->log, "out %s (%016"PRIx64")", format_position(str, sizeof(str),
@@ -2160,8 +2181,9 @@ static void free_tmp(struct impl *this)
 	}
 }
 
-static int ensure_tmp(struct impl *this, uint32_t maxsize, uint32_t maxports)
+static int ensure_tmp(struct impl *this)
 {
+	uint32_t maxsize = this->maxsize, maxports = this->maxports;
 	if (maxsize > this->scratch_size || maxports > this->scratch_ports) {
 		float *empty, *scratch, *tmp[2];
 		uint32_t i;
@@ -2257,7 +2279,7 @@ static inline bool resample_is_passthrough(struct impl *this)
 static int setup_convert(struct impl *this)
 {
 	struct dir *in, *out;
-	uint32_t i, rate, maxsize, maxports, duration, channels, *position;
+	uint32_t i, rate, duration;
 	struct port *p;
 	int res;
 
@@ -2304,39 +2326,25 @@ static int setup_convert(struct impl *this)
 	if (in->format.info.raw.channels == 0 || out->format.info.raw.channels == 0)
 		return -EINVAL;
 
-	channels = in->format.info.raw.channels;
-	position = in->format.info.raw.position;
-	maxports = SPA_MAX(in->format.info.raw.channels, out->format.info.raw.channels);
-
 	if ((res = setup_in_convert(this)) < 0)
 		return res;
-	for (i = 0; i < this->n_graph; i++) {
-		struct filter_graph *g = &this->filter_graph[this->graph_index[i]];
-		if (!g->active)
-			continue;
-		if ((res = setup_filter_graph(this, g, channels, position)) < 0)
-			return res;
-		channels = g->n_outputs;
-		position = g->outputs_position;
-		maxports = SPA_MAX(maxports, channels);
-	}
-	if ((res = setup_channelmix(this, channels, position)) < 0)
+	if ((res = setup_filter_graphs(this)) < 0)
 		return res;
 	if ((res = setup_resample(this)) < 0)
 		return res;
 	if ((res = setup_out_convert(this)) < 0)
 		return res;
 
-	maxsize = this->quantum_limit * sizeof(float);
+	this->maxsize = this->quantum_limit * sizeof(float);
 	for (i = 0; i < in->n_ports; i++) {
 		p = GET_IN_PORT(this, i);
-		maxsize = SPA_MAX(maxsize, p->maxsize);
+		this->maxsize = SPA_MAX(this->maxsize, p->maxsize);
 	}
 	for (i = 0; i < out->n_ports; i++) {
 		p = GET_OUT_PORT(this, i);
-		maxsize = SPA_MAX(maxsize, p->maxsize);
+		this->maxsize = SPA_MAX(this->maxsize, p->maxsize);
 	}
-	if ((res = ensure_tmp(this, maxsize, maxports)) < 0)
+	if ((res = ensure_tmp(this)) < 0)
 		return res;
 
 	resample_update_rate_match(this, resample_is_passthrough(this), duration, 0);
@@ -2351,11 +2359,12 @@ static int setup_convert(struct impl *this)
 
 static void reset_node(struct impl *this)
 {
-	uint32_t i;
-	for (i = 0; i < MAX_GRAPH; i++) {
-		struct filter_graph *g = &this->filter_graph[i];
+	struct filter_graph *g;
+
+	spa_list_for_each(g, &this->active_graphs, link) {
 		if (g->graph)
 			spa_filter_graph_deactivate(g->graph);
+		g->setup = false;
 	}
 	if (this->resample.reset)
 		resample_reset(&this->resample);
@@ -3535,7 +3544,7 @@ static void recalc_stages(struct impl *this, struct stage_context *ctx)
 	}
 	if (!filter_passthrough) {
 		for (i = 0; i < this->n_graph; i++) {
-			struct filter_graph *fg = &this->filter_graph[this->graph_index[i]];
+			struct filter_graph *fg = this->filter_graph[i];
 
 			if (mix_passthrough && resample_passthrough && out_passthrough &&
 			    i + 1 == this->n_graph)
@@ -4066,6 +4075,13 @@ impl_init(const struct spa_handle_factory *factory,
 
 	props_reset(&this->props);
 	filter_graph_disabled = this->props.filter_graph_disabled;
+	spa_list_init(&this->active_graphs);
+	spa_list_init(&this->free_graphs);
+	for (i = 0; i < MAX_GRAPH; i++) {
+		struct filter_graph *g = &this->graphs[i];
+		g->impl = this;
+		spa_list_append(&this->free_graphs, &g->link);
+	}
 
 	this->rate_limit.interval = 2 * SPA_NSEC_PER_SEC;
 	this->rate_limit.burst = 1;
