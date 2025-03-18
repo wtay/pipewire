@@ -46,7 +46,6 @@ struct spa_filter_graph_info {
 
 #define SPA_FILTER_GRAPH_CHANGE_MASK_FLAGS		(1u<<0)
 #define SPA_FILTER_GRAPH_CHANGE_MASK_PROPS		(1u<<1)
-#define SPA_FILTER_GRAPH_CHANGE_MASK_PORTS		(1u<<2)
 	uint64_t change_mask;
 
 	uint64_t flags;

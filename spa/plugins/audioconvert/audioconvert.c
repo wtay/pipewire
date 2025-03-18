@@ -229,7 +229,9 @@ struct filter_graph {
 	struct spa_filter_graph *graph;
 	struct spa_hook listener;
 	uint32_t n_inputs;
+	uint32_t inputs_position[SPA_AUDIO_MAX_CHANNELS];
 	uint32_t n_outputs;
+	uint32_t outputs_position[SPA_AUDIO_MAX_CHANNELS];
 	bool active;
 };
 
@@ -961,10 +963,28 @@ static int impl_node_set_io(void *object, uint32_t id, void *data, size_t size)
 static void graph_info(void *object, const struct spa_filter_graph_info *info)
 {
 	struct filter_graph *g = object;
+	struct spa_dict *props = info->props;
+	uint32_t i;
+
 	if (!g->active)
 		return;
+
 	g->n_inputs = info->n_inputs;
 	g->n_outputs = info->n_outputs;
+	for (i = 0; props && i < props->n_items; i++) {
+		const char *k = props->items[i].key;
+		const char *s = props->items[i].value;
+		if (spa_streq(k, "n_inputs"))
+			spa_atou32(s, &g->n_inputs, 0);
+		else if (spa_streq(k, "n_outputs"))
+			spa_atou32(s, &g->n_outputs, 0);
+		else if (spa_streq(k, "inputs.audio.position"))
+			spa_audio_parse_position(s, strlen(s),
+					g->inputs_position, &g->n_inputs);
+		else if (spa_streq(k, "outputs.audio.position"))
+			spa_audio_parse_position(s, strlen(s),
+					g->outputs_position, &g->n_outputs);
+	}
 }
 
 static int apply_props(struct impl *impl, const struct spa_pod *props);
@@ -996,22 +1016,29 @@ struct spa_filter_graph_events graph_events = {
 	.props_changed = graph_props_changed,
 };
 
-static int setup_filter_graph(struct impl *this, struct spa_filter_graph *graph, uint32_t channels)
+static int setup_filter_graph(struct impl *this, struct filter_graph *g,
+		uint32_t channels, uint32_t *position)
 {
 	int res;
 	char rate_str[64], in_ports[64];
 	struct dir *dir;
 
-	if (graph == NULL)
+	if (g == NULL || g->graph == NULL)
 		return 0;
 
 	dir = &this->dir[SPA_DIRECTION_REVERSE(this->direction)];
 	snprintf(rate_str, sizeof(rate_str), "%d", dir->format.info.raw.rate);
-	if (channels)
+	if (channels) {
 		snprintf(in_ports, sizeof(in_ports), "%d", channels);
+		g->n_inputs = channels;
+		if (position) {
+			memcpy(g->inputs_position, position, sizeof(uint32_t) * channels);
+			memcpy(g->outputs_position, position, sizeof(uint32_t) * channels);
+		}
+	}
 
-	spa_filter_graph_deactivate(graph);
-	res = spa_filter_graph_activate(graph,
+	spa_filter_graph_deactivate(g->graph);
+	res = spa_filter_graph_activate(g->graph,
 				     &SPA_DICT_ITEMS(
 					     SPA_DICT_ITEM(SPA_KEY_AUDIO_RATE, rate_str),
 					     SPA_DICT_ITEM("filter-graph.n_inputs", channels ? in_ports : NULL)));
@@ -1109,10 +1136,12 @@ static int load_filter_graph(struct impl *impl, const char *graph, int order)
 			goto error;
 
 		/* prepare new filter and swap it */
-		res = setup_filter_graph(impl, iface, 0);
-		if (res < 0)
-			goto error;
 		pending->graph = iface;
+		res = setup_filter_graph(impl, pending, 0, NULL);
+		if (res < 0) {
+			pending->graph = NULL;
+			goto error;
+		}
 		pending->active = true;
 		spa_log_info(impl->log, "loading filter-graph order:%d in %d active:%d",
 				order, idx, n_graph + 1);
@@ -1908,7 +1937,7 @@ static char *format_position(char *str, size_t len, uint32_t channels, uint32_t 
 	return str;
 }
 
-static int setup_channelmix(struct impl *this, uint32_t channels)
+static int setup_channelmix(struct impl *this, uint32_t channels, uint32_t *position)
 {
 	struct dir *in = &this->dir[SPA_DIRECTION_INPUT];
 	struct dir *out = &this->dir[SPA_DIRECTION_OUTPUT];
@@ -1921,7 +1950,7 @@ static int setup_channelmix(struct impl *this, uint32_t channels)
 	dst_chan = out->format.info.raw.channels;
 
 	for (i = 0, src_mask = 0; i < src_chan; i++) {
-		p = in->format.info.raw.position[i];
+		p = position[i];
 		src_mask |= 1ULL << (p < 64 ? p : 0);
 	}
 	for (i = 0, dst_mask = 0; i < dst_chan; i++) {
@@ -1936,7 +1965,7 @@ static int setup_channelmix(struct impl *this, uint32_t channels)
 		src_mask = dst_mask;
 
 	spa_log_info(this->log, "in  %s (%016"PRIx64")", format_position(str, sizeof(str),
-				src_chan, in->format.info.raw.position), src_mask);
+				src_chan, position), src_mask);
 	spa_log_info(this->log, "out %s (%016"PRIx64")", format_position(str, sizeof(str),
 				dst_chan, out->format.info.raw.position), dst_mask);
 
@@ -2228,7 +2257,7 @@ static inline bool resample_is_passthrough(struct impl *this)
 static int setup_convert(struct impl *this)
 {
 	struct dir *in, *out;
-	uint32_t i, rate, maxsize, maxports, duration, channels;
+	uint32_t i, rate, maxsize, maxports, duration, channels, *position;
 	struct port *p;
 	int res;
 
@@ -2276,6 +2305,8 @@ static int setup_convert(struct impl *this)
 		return -EINVAL;
 
 	channels = in->format.info.raw.channels;
+	position = in->format.info.raw.position;
+	maxports = SPA_MAX(in->format.info.raw.channels, out->format.info.raw.channels);
 
 	if ((res = setup_in_convert(this)) < 0)
 		return res;
@@ -2283,11 +2314,13 @@ static int setup_convert(struct impl *this)
 		struct filter_graph *g = &this->filter_graph[this->graph_index[i]];
 		if (!g->active)
 			continue;
-		if ((res = setup_filter_graph(this, g->graph, channels)) < 0)
+		if ((res = setup_filter_graph(this, g, channels, position)) < 0)
 			return res;
 		channels = g->n_outputs;
+		position = g->outputs_position;
+		maxports = SPA_MAX(maxports, channels);
 	}
-	if ((res = setup_channelmix(this, channels)) < 0)
+	if ((res = setup_channelmix(this, channels, position)) < 0)
 		return res;
 	if ((res = setup_resample(this)) < 0)
 		return res;
@@ -2303,7 +2336,6 @@ static int setup_convert(struct impl *this)
 		p = GET_OUT_PORT(this, i);
 		maxsize = SPA_MAX(maxsize, p->maxsize);
 	}
-	maxports = SPA_MAX(in->format.info.raw.channels, out->format.info.raw.channels);
 	if ((res = ensure_tmp(this, maxsize, maxports)) < 0)
 		return res;
 

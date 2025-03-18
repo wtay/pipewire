@@ -183,6 +183,13 @@ struct graph {
 
 	struct volume volume[2];
 
+	uint32_t n_inputs;
+	uint32_t n_outputs;
+	uint32_t inputs_position[SPA_AUDIO_MAX_CHANNELS];
+	uint32_t n_inputs_position;
+	uint32_t outputs_position[SPA_AUDIO_MAX_CHANNELS];
+	uint32_t n_outputs_position;
+
 	unsigned activated:1;
 	unsigned setup:1;
 };
@@ -212,14 +219,52 @@ struct impl {
 	float *discard_data;
 };
 
+static inline void print_channels(char *buffer, size_t max_size, uint32_t n_channels, uint32_t *positions)
+{
+	uint32_t i;
+	struct spa_strbuf buf;
+
+	spa_strbuf_init(&buf, buffer, max_size);
+	spa_strbuf_append(&buf, "[");
+	for (i = 0; i < n_channels; i++) {
+		spa_strbuf_append(&buf, "%s%s", i ? "," : "",
+			spa_type_audio_channel_to_short_name(positions[i]));
+	}
+	spa_strbuf_append(&buf, "]");
+}
+
 static void emit_filter_graph_info(struct impl *impl, bool full)
 {
 	uint64_t old = full ? impl->info.change_mask : 0;
+	struct graph *graph = &impl->graph;
 
 	if (full)
 		impl->info.change_mask = impl->info_all;
 	if (impl->info.change_mask || full) {
+		char n_inputs[64], n_outputs[64];
+		struct spa_dict_item items[6];
+		struct spa_dict dict = SPA_DICT(items, 0);
+		char in_pos[SPA_AUDIO_MAX_CHANNELS * 8];
+		char out_pos[SPA_AUDIO_MAX_CHANNELS * 8];
+
+		snprintf(n_inputs, sizeof(n_inputs), "%d", impl->graph.n_inputs);
+		snprintf(n_outputs, sizeof(n_outputs), "%d", impl->graph.n_outputs);
+
+		items[dict.n_items++] = SPA_DICT_ITEM("n_inputs", n_inputs);
+		items[dict.n_items++] = SPA_DICT_ITEM("n_outputs", n_outputs);
+		if (graph->n_inputs_position) {
+			print_channels(in_pos, sizeof(in_pos),
+					graph->n_inputs_position, graph->inputs_position);
+			items[dict.n_items++] = SPA_DICT_ITEM("inputs.audio.position", in_pos);
+		}
+		if (graph->n_outputs_position) {
+			print_channels(out_pos, sizeof(out_pos),
+					graph->n_outputs_position, graph->outputs_position);
+			items[dict.n_items++] = SPA_DICT_ITEM("outputs.audio.position", out_pos);
+		}
+		impl->info.props = &dict;
 		spa_filter_graph_emit_info(&impl->hooks, &impl->info);
+		impl->info.props = NULL;
 		impl->info.change_mask = old;
 	}
 }
@@ -250,7 +295,7 @@ static int impl_process(void *object,
 	uint32_t i, j, n_hndl = graph->n_hndl;
 	struct graph_port *port;
 
-	for (i = 0, j = 0; i < impl->info.n_inputs; i++) {
+	for (i = 0, j = 0; i < graph->n_inputs; i++) {
 		while (j < graph->n_input) {
 			port = &graph->input[j++];
 			if (port->desc && in[i])
@@ -259,7 +304,7 @@ static int impl_process(void *object,
 				break;
 		}
 	}
-	for (i = 0; i < impl->info.n_outputs; i++) {
+	for (i = 0; i < graph->n_outputs; i++) {
 		if (out[i] == NULL)
 			continue;
 
@@ -1457,19 +1502,19 @@ static int impl_activate(void *object, const struct spa_dict *props)
 
 	if ((str = spa_dict_lookup(props, "filter-graph.n_inputs")) != NULL) {
 		if (spa_atou32(str, &n_ports, 0) &&
-		    n_ports != impl->info.n_inputs) {
-			impl->info.n_inputs = n_ports;
-			impl->info.n_outputs = 0;
-			impl->info.change_mask |= SPA_FILTER_GRAPH_CHANGE_MASK_PORTS;
+		    n_ports != graph->n_inputs) {
+			graph->n_inputs = n_ports;
+			graph->n_outputs = 0;
+			impl->info.change_mask |= SPA_FILTER_GRAPH_CHANGE_MASK_PROPS;
 			graph->setup = false;
 		}
 	}
 	if ((str = spa_dict_lookup(props, "filter-graph.n_outputs")) != NULL) {
 		if (spa_atou32(str, &n_ports, 0) &&
-		    n_ports != impl->info.n_outputs) {
-			impl->info.n_outputs = n_ports;
-			impl->info.n_inputs = 0;
-			impl->info.change_mask |= SPA_FILTER_GRAPH_CHANGE_MASK_PORTS;
+		    n_ports != graph->n_outputs) {
+			graph->n_outputs = n_ports;
+			graph->n_inputs = 0;
+			impl->info.change_mask |= SPA_FILTER_GRAPH_CHANGE_MASK_PROPS;
 			graph->setup = false;
 		}
 	}
@@ -1477,7 +1522,7 @@ static int impl_activate(void *object, const struct spa_dict *props)
 		if ((res = setup_graph(graph)) < 0)
 			return res;
 		graph->setup = true;
-		spa_filter_graph_emit_info(&impl->hooks, &impl->info);
+		emit_filter_graph_info(impl, false);
 	}
 
 	/* first make instances */
@@ -1666,24 +1711,28 @@ static int setup_graph(struct graph *graph)
 		res = -EINVAL;
 		goto error;
 	}
+	if (graph->n_inputs == 0)
+		graph->n_inputs = impl->info.n_inputs;
+	if (graph->n_inputs == 0)
+		graph->n_inputs = n_input;
 
-	if (impl->info.n_inputs == 0)
-		impl->info.n_inputs = n_input;
+	if (graph->n_outputs == 0)
+		graph->n_outputs = impl->info.n_outputs;
 
 	/* compare to the requested number of inputs and duplicate the
 	 * graph n_hndl times when needed. */
-	n_hndl = impl->info.n_inputs / n_input;
+	n_hndl = graph->n_inputs / n_input;
 
-	if (impl->info.n_outputs == 0)
-		impl->info.n_outputs = n_output * n_hndl;
+	if (graph->n_outputs == 0)
+		graph->n_outputs = n_output * n_hndl;
 
-	if (n_hndl != impl->info.n_outputs / n_output) {
+	if (n_hndl != graph->n_outputs / n_output) {
 		spa_log_error(impl->log, "invalid ports. The input stream has %1$d ports and "
 				"the filter has %2$d inputs. The output stream has %3$d ports "
 				"and the filter has %4$d outputs. input:%1$d / input:%2$d != "
 				"output:%3$d / output:%4$d. Check inputs and outputs objects.",
-				impl->info.n_inputs, n_input,
-				impl->info.n_outputs, n_output);
+				graph->n_inputs, n_input,
+				graph->n_outputs, n_output);
 		res = -EINVAL;
 		goto error;
 	}
@@ -1699,11 +1748,11 @@ static int setup_graph(struct graph *graph)
 				"the filter has %2$d inputs. The output stream has %3$d ports "
 				"and the filter has %4$d outputs. Some filter ports will be "
 				"unconnected..",
-				impl->info.n_inputs, n_input,
-				impl->info.n_outputs, n_output);
+				graph->n_inputs, n_input,
+				graph->n_outputs, n_output);
 
-		if (impl->info.n_outputs == 0)
-			impl->info.n_outputs = n_output * n_hndl;
+		if (graph->n_outputs == 0)
+			graph->n_outputs = n_output * n_hndl;
 	}
 	spa_log_info(impl->log, "using %d instances %d %d", n_hndl, n_input, n_output);
 
@@ -1948,6 +1997,26 @@ static int load_graph(struct graph *graph, const struct spa_dict *props)
 				return -EINVAL;
 			}
 			impl->info.n_outputs = res;
+		}
+		else if (spa_streq("inputs.audio.position", key)) {
+			if (!spa_json_is_array(val, len) ||
+			    (len = spa_json_container_len(&it[0], val, len)) < 0) {
+				spa_log_error(impl->log, "%s expects an array", key);
+				return -EINVAL;
+			}
+			spa_audio_parse_position(val, len, graph->inputs_position,
+						&graph->n_inputs_position);
+			impl->info.n_inputs = graph->n_inputs_position;
+		}
+		else if (spa_streq("outputs.audio.position", key)) {
+			if (!spa_json_is_array(val, len) ||
+			    (len = spa_json_container_len(&it[0], val, len)) < 0) {
+				spa_log_error(impl->log, "%s expects an array", key);
+				return -EINVAL;
+			}
+			spa_audio_parse_position(val, len, graph->outputs_position,
+						&graph->n_outputs_position);
+			impl->info.n_outputs = graph->n_outputs_position;
 		}
 		else if (spa_streq("nodes", key)) {
 			if (!spa_json_is_array(val, len)) {
