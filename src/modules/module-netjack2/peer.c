@@ -263,7 +263,7 @@ static inline void *n2j_midi_buffer_reserve(struct nj2_midi_buffer *buf,
 		if (used_size + size > buf->buffer_size)
 			return NULL;
 		buf->write_pos += size;
-		ev->offset = buf->buffer_size - 1 - buf->write_pos;
+		ev->offset = buf->buffer_size - buf->write_pos;
 		ptr = SPA_PTROFF(buf, ev->offset, void);
 	}
 	buf->event_count++;
