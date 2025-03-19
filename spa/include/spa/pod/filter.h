@@ -177,7 +177,7 @@ spa_pod_filter_prop(struct spa_pod_builder *b,
 	nc = (struct spa_pod_choice*)spa_pod_builder_frame(b, &f);
 
 	/* default value */
-	spa_pod_builder_primitive(b, v1);
+	spa_pod_builder_primitive(b, v2);
 
 	if ((p1c == SPA_CHOICE_None && p2c == SPA_CHOICE_None) ||
 	    (p1c == SPA_CHOICE_None && p2c == SPA_CHOICE_Enum) ||
@@ -185,10 +185,10 @@ spa_pod_filter_prop(struct spa_pod_builder *b,
 	    (p1c == SPA_CHOICE_Enum && p2c == SPA_CHOICE_Enum)) {
 		int n_copied = 0;
 		/* copy all equal values but don't copy the default value again */
-		for (j = 0, a1 = alt1; j < nalt1; j++, a1 = SPA_PTROFF(a1, size, void)) {
-			for (k = 0, a2 = alt2; k < nalt2; k++, a2 = SPA_PTROFF(a2,size,void)) {
+		for (j = 0, a2 = alt2; j < nalt2; j++, a2 = SPA_PTROFF(a2, size, void)) {
+			for (k = 0, a1 = alt1; k < nalt1; k++, a1 = SPA_PTROFF(a1,size,void)) {
 				if (spa_pod_compare_value(type, a1, a2, size) == 0) {
-					if (p1c == SPA_CHOICE_Enum || j > 0)
+					if (p2c == SPA_CHOICE_Enum || j > 0)
 						spa_pod_builder_raw(b, a1, size);
 					n_copied++;
 				}
