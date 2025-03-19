@@ -373,6 +373,8 @@ static inline void netjack2_to_midi(float *dst, uint32_t size, struct nj2_midi_b
 	struct spa_pod_builder b = { 0, };
 	uint32_t i;
 	struct spa_pod_frame f;
+	size_t offset = size - buf->write_pos -
+		sizeof(*buf) - (buf->event_count * sizeof(struct nj2_midi_event));
 
 	spa_pod_builder_init(&b, dst, size);
 	spa_pod_builder_push_sequence(&b, &f, 0);
@@ -384,8 +386,8 @@ static inline void netjack2_to_midi(float *dst, uint32_t size, struct nj2_midi_b
 
 		if (ev->size <= MIDI_INLINE_MAX)
 			data = ev->buffer;
-		else if (ev->offset > buf->write_pos)
-			data = SPA_PTROFF(buf, ev->offset - buf->write_pos, void);
+		else if (ev->offset > offset)
+			data = SPA_PTROFF(buf, ev->offset - offset, void);
 		else
 			continue;
 
@@ -393,9 +395,10 @@ static inline void netjack2_to_midi(float *dst, uint32_t size, struct nj2_midi_b
 		while (s > 0) {
 			uint32_t ump[4];
 			int ump_size = spa_ump_from_midi(&data, &s, ump, sizeof(ump), 0, &state);
-			if (ump_size <= 0)
+			if (ump_size <= 0) {
+				pw_log_warn("invalid MIDI received: %s", spa_strerror(ump_size));
 				break;
-
+			}
 			spa_pod_builder_control(&b, ev->time, SPA_CONTROL_UMP);
 	                spa_pod_builder_bytes(&b, ump, ump_size);
 		}
