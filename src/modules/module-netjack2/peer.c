@@ -313,7 +313,7 @@ static void midi_to_netjack2(struct netjack2_peer *peer,
 	bool in_sysex = false;
 
 	buf->magic = MIDI_BUFFER_MAGIC;
-	buf->buffer_size = peer->quantum_limit * sizeof(float);
+	buf->buffer_size = peer->params.period_size * sizeof(float);
 	buf->nframes = n_samples;
 	buf->write_pos = 0;
 	buf->event_count = 0;
