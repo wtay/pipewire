@@ -1538,7 +1538,7 @@ static inline jack_midi_data_t* midi_event_reserve(void *port_buffer,
 			res = ev->inline_data;
 		} else {
 			mb->write_pos += data_size;
-			ev->byte_offset = mb->buffer_size - 1 - mb->write_pos;
+			ev->byte_offset = mb->buffer_size - mb->write_pos;
 			res = SPA_PTROFF(mb, ev->byte_offset, uint8_t);
 		}
 		mb->event_count += 1;
@@ -5793,8 +5793,8 @@ static void *get_buffer_input_midi(struct port *p, jack_nframes_t frames)
 	convert_to_event(seq, n_seq, mb, p->client->fix_midi_events, p->object->port.type_id);
 	memcpy(ptr, mb, sizeof(struct midi_buffer) + (mb->event_count
                               * sizeof(struct midi_event)));
-	if (mb->write_pos) {
-		size_t offs = mb->buffer_size - 1 - mb->write_pos;
+	if (mb->write_pos > 0) {
+		size_t offs = mb->buffer_size - mb->write_pos;
 		memcpy(SPA_PTROFF(ptr, offs, void), SPA_PTROFF(mb, offs, void), mb->write_pos);
 	}
 	return ptr;
